@@ -107,6 +107,7 @@ static AppTimer *screen_tick_handler;
 #define PERSIST_KEY_BG_FILL_COLOR     210
 #define PERSIST_KEY_BG_MARKERS_COLOR  211
 #define PERSIST_KEY_BG_MARKERS_STYLE  212
+#define PERSIST_KEY_ICONS_SMALL       214
 
 // Crash / lifecycle diagnostics keys
 #define PERSIST_KEY_LAST_LAUNCH_TS    300  // time_t of last init()
@@ -214,6 +215,11 @@ static bool    s_bg_use_custom           = false;  // false = use PNG, true = co
 static uint8_t s_bg_fill_color_argb      = 0xC0;  // black background
 static uint8_t s_bg_markers_color_argb   = 0xFF;  // white markers
 static uint8_t s_bg_markers_style        = 0;     // 0=Arabic, 1=Roman, 2=Ticks
+
+// Menu icon size (Emery only). false = default 27x22, true = compact 18x15.
+// Picking compact frees up vertical space around the Tama LCD, useful if
+// the user wants a tighter look.
+static bool    s_icons_small             = false;
 static bool s_sound_enabled     = false;  // OFF by default — opt-in feature
 static uint8_t s_sound_volume   = 60;
 
@@ -548,17 +554,26 @@ static void icons_update_proc(Layer *layer, GContext *ctx) {
   if(s_selectedIcon >= 0)
   {
     #if defined(PBL_PLATFORM_EMERY)
-    // New Emery layout: icons in 2 rows of 4, centered on screen.
-    // Row 0-3 above Tama (y=118), row 4-7 below Tama (y=176).
-    // Icon spacing: starting at x=41, step 30px (27 wide + 3 gap).
-    uint8_t xPos = 41 + ((s_selectedIcon % 4) * 30);
-    uint8_t yPos = (s_selectedIcon > 3 ? 176 : 118);
+    // Emery layout: 2 rows of 4 icons, centered on screen.
+    // Default (27x22): start x=41, step 30 (=27+3 gap), rows at y=118 and y=176.
+    // Compact (18x15): start x=58, step 22 (=18+4 gap), rows at y=121 and y=185
+    // — slightly tighter, with rows pulled a bit closer to the Tama LCD.
+    uint8_t icon_w   = s_icons_small ? 18 : 27;
+    uint8_t icon_h   = s_icons_small ? 15 : 22;
+    uint8_t step     = s_icons_small ? 22 : 30;
+    uint8_t start_x  = s_icons_small ? 58 : 41;
+    uint8_t y_top    = s_icons_small ? 121 : 118;
+    uint8_t y_bottom = s_icons_small ? 185 : 176;
+    uint8_t xPos = start_x + ((s_selectedIcon % 4) * step);
+    uint8_t yPos = (s_selectedIcon > 3 ? y_bottom : y_top);
     #elif defined(PBL_PLATFORM_GABBRO)
     uint8_t xPos = 12 + ((s_selectedIcon%4) * 40); 
     uint8_t yPos = (s_selectedIcon > 3 ? 120 : 0);
+    uint8_t icon_w = 27, icon_h = 22;
     #else
     uint8_t xPos = 12 + ((s_selectedIcon%4) * 32);
     uint8_t yPos = (s_selectedIcon > 3 ? 100 : 0);
+    uint8_t icon_w = 22, icon_h = 18;
     #endif
 
     GBitmap* selected_icon = s_bitmap_icon7;
@@ -591,19 +606,21 @@ static void icons_update_proc(Layer *layer, GContext *ctx) {
     }
 
     // Draw selected icon if selected
-    #if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
-    graphics_draw_bitmap_in_rect(ctx, selected_icon, GRect(xPos, yPos, 27, 22));
-    #else
-    graphics_draw_bitmap_in_rect(ctx, selected_icon, GRect(xPos, yPos, 22, 18));
-    #endif
+    graphics_draw_bitmap_in_rect(ctx, selected_icon, GRect(xPos, yPos, icon_w, icon_h));
   }
 
   // Handle attention icon
   if(s_showingAttentionIcon)
   {
     #if defined(PBL_PLATFORM_EMERY)
-    // Show attention icon at the rightmost position in the bottom row
-    graphics_draw_bitmap_in_rect(ctx, s_bitmap_icon8, GRect(41 + 3*30, 176, 27, 22));
+    // Attention icon at rightmost position in the bottom row
+    uint8_t icon_w_a   = s_icons_small ? 18 : 27;
+    uint8_t icon_h_a   = s_icons_small ? 15 : 22;
+    uint8_t step_a     = s_icons_small ? 22 : 30;
+    uint8_t start_x_a  = s_icons_small ? 58 : 41;
+    uint8_t y_bottom_a = s_icons_small ? 185 : 176;
+    graphics_draw_bitmap_in_rect(ctx, s_bitmap_icon8,
+      GRect(start_x_a + 3*step_a, y_bottom_a, icon_w_a, icon_h_a));
     #elif defined(PBL_PLATFORM_GABBRO)
     graphics_draw_bitmap_in_rect(ctx, s_bitmap_icon8, GRect(12+(40*3), 120, 27, 22)); 
     #else
@@ -619,11 +636,21 @@ static void tama_bg_update_proc(Layer *layer, GContext *ctx)
 {
 #if defined(PBL_PLATFORM_EMERY)
   set_activity(ACT_DRAW_TAMA_BG);
-  // Layer is at absolute (35, 110), size 130x96. Local coords:
-  //   Tama LCD at absolute (68, 142, 64, 32) -> local (33, 32, 64, 32)
-  //   Top icons at absolute y=118..140 -> local y=8..30
-  //   Bot icons at absolute y=176..198 -> local y=66..88
-  //   Icons span absolute x=41..158 (117px wide) -> local x=6..123
+  // The layer covers a 130x96 region at absolute (35, 110). We dynamically
+  // size the white background rectangle inside it depending on which icon
+  // rows are active and on the user's icon-size setting.
+  //
+  // Default icons (27x22):
+  //   Top icons at absolute y=118..140  -> local y=8..30
+  //   Tama LCD at absolute y=142..174   -> local y=32..64
+  //   Bot icons at absolute y=176..198  -> local y=66..88
+  //   Icons span absolute x=41..158     -> local x=6..123
+  //
+  // Compact icons (18x15):
+  //   Top icons at absolute y=121..136  -> local y=11..26
+  //   Tama LCD at absolute y=142..174   -> local y=32..64
+  //   Bot icons at absolute y=185..200  -> local y=75..90
+  //   Icons span absolute x=58..142     -> local x=23..107
 
   bool icon_top_active    = (s_selectedIcon >= 0 && s_selectedIcon <= 3);
   bool icon_bottom_active = (s_selectedIcon >= 4 && s_selectedIcon <= 7);
@@ -632,21 +659,31 @@ static void tama_bg_update_proc(Layer *layer, GContext *ctx)
   bool need_bottom = icon_bottom_active || attention_active;
   bool need_wide   = need_top || need_bottom;
 
-  // Vertical extent
-  int top    = need_top    ? 4  : 28;
-  int bottom = need_bottom ? 92 : 68;
+  int top, bottom, left, right;
 
-  // Horizontal extent: wide when icons are visible (cover all 4),
-  // narrow when just framing the Tama LCD
-  int left, right;
-  if (need_wide) {
-    // Cover icon row (local x=6..123) with a small margin
-    left  = 3;
-    right = 127;
+  if (s_icons_small) {
+    top    = need_top    ? 7  : 28;
+    bottom = need_bottom ? 94 : 68;
+    if (need_wide) {
+      // Cover compact icon row (local x=23..107) with a small margin
+      left  = 20;
+      right = 111;
+    } else {
+      // Just around the Tama (local x=33..97), with a 4px margin
+      left  = 29;
+      right = 101;
+    }
   } else {
-    // Just around the Tama (local x=33..97), with a 4px margin
-    left  = 29;
-    right = 101;
+    top    = need_top    ? 4  : 28;
+    bottom = need_bottom ? 92 : 68;
+    if (need_wide) {
+      // Cover default icon row (local x=6..123) with a small margin
+      left  = 3;
+      right = 127;
+    } else {
+      left  = 29;
+      right = 101;
+    }
   }
 
   GRect rect = GRect(left, top, right - left, bottom - top);
@@ -1000,6 +1037,19 @@ static void prv_inbox_received_handler(DictionaryIterator *iter, void *context) 
     s_bg_markers_style = (uint8_t)v;
     persist_write_int(PERSIST_KEY_BG_MARKERS_STYLE, v);
     customization_changed = true;
+  }
+  Tuple *icons_small_t = dict_find(iter, MESSAGE_KEY_IconsSmall);
+  if (icons_small_t) {
+    bool new_val = (icons_small_t->value->int32 != 0);
+    if (new_val != s_icons_small) {
+      // Like BgUseCustom, switching icon size requires reloading bitmap
+      // resources. Persist and ask user to relaunch the app.
+      s_icons_small = new_val;
+      persist_write_bool(PERSIST_KEY_ICONS_SMALL, s_icons_small);
+      APP_LOG(APP_LOG_LEVEL_INFO,
+              "IconsSmall changed to %d -- restart app to apply",
+              (int)s_icons_small);
+    }
   }
 
   if (customization_changed) {
@@ -1393,7 +1443,30 @@ static void main_window_load(Window *window) {
   layer_add_child(window_layer, s_tama_bg_layer);
 #endif
 
-  // Create bitmaps for icons
+  // Create bitmaps for icons. On Emery, we offer two sizes — default
+  // (27x22) or compact (18x15) — selectable via the IconsSmall setting.
+  // Other platforms always use the default size.
+#if defined(PBL_PLATFORM_EMERY)
+  if (s_icons_small) {
+    s_bitmap_icon1 = gbitmap_create_with_resource(RESOURCE_ID_ICON1_SM);
+    s_bitmap_icon2 = gbitmap_create_with_resource(RESOURCE_ID_ICON2_SM);
+    s_bitmap_icon3 = gbitmap_create_with_resource(RESOURCE_ID_ICON3_SM);
+    s_bitmap_icon4 = gbitmap_create_with_resource(RESOURCE_ID_ICON4_SM);
+    s_bitmap_icon5 = gbitmap_create_with_resource(RESOURCE_ID_ICON5_SM);
+    s_bitmap_icon6 = gbitmap_create_with_resource(RESOURCE_ID_ICON6_SM);
+    s_bitmap_icon7 = gbitmap_create_with_resource(RESOURCE_ID_ICON7_SM);
+    s_bitmap_icon8 = gbitmap_create_with_resource(RESOURCE_ID_ICON8_SM);
+  } else {
+    s_bitmap_icon1 = gbitmap_create_with_resource(RESOURCE_ID_ICON1);
+    s_bitmap_icon2 = gbitmap_create_with_resource(RESOURCE_ID_ICON2);
+    s_bitmap_icon3 = gbitmap_create_with_resource(RESOURCE_ID_ICON3);
+    s_bitmap_icon4 = gbitmap_create_with_resource(RESOURCE_ID_ICON4);
+    s_bitmap_icon5 = gbitmap_create_with_resource(RESOURCE_ID_ICON5);
+    s_bitmap_icon6 = gbitmap_create_with_resource(RESOURCE_ID_ICON6);
+    s_bitmap_icon7 = gbitmap_create_with_resource(RESOURCE_ID_ICON7);
+    s_bitmap_icon8 = gbitmap_create_with_resource(RESOURCE_ID_ICON8);
+  }
+#else
   s_bitmap_icon1 = gbitmap_create_with_resource(RESOURCE_ID_ICON1);
   s_bitmap_icon2 = gbitmap_create_with_resource(RESOURCE_ID_ICON2);
   s_bitmap_icon3 = gbitmap_create_with_resource(RESOURCE_ID_ICON3);
@@ -1402,6 +1475,7 @@ static void main_window_load(Window *window) {
   s_bitmap_icon6 = gbitmap_create_with_resource(RESOURCE_ID_ICON6);
   s_bitmap_icon7 = gbitmap_create_with_resource(RESOURCE_ID_ICON7);
   s_bitmap_icon8 = gbitmap_create_with_resource(RESOURCE_ID_ICON8);
+#endif
 
   // Create icons layer
 #if defined(PBL_PLATFORM_CHALK)
@@ -1977,6 +2051,9 @@ static void loadSettingsFromPersist(void)
   if (persist_exists(PERSIST_KEY_BG_MARKERS_STYLE)) {
     int v = persist_read_int(PERSIST_KEY_BG_MARKERS_STYLE);
     if (v >= 0 && v <= 2) s_bg_markers_style = (uint8_t)v;
+  }
+  if (persist_exists(PERSIST_KEY_ICONS_SMALL)) {
+    s_icons_small = persist_read_bool(PERSIST_KEY_ICONS_SMALL);
   }
 
   APP_LOG(APP_LOG_LEVEL_INFO,
