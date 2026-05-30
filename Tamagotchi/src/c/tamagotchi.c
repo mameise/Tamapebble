@@ -34,6 +34,7 @@ static void battery_handler(BatteryChargeState state);
 static Window *s_main_window;
 static BitmapLayer *s_background_layer;
 static Layer *s_tama_bg_layer = NULL;  // white background behind Tama + icons (Emery)
+static Layer *s_bg_custom_layer = NULL;  // custom drawn background (Emery only)
 static Layer *s_screen_layer;
 static Layer *s_icons_layer;
 static Layer *s_hands_layer = NULL;  // analog clock hands (Emery)
@@ -102,6 +103,10 @@ static AppTimer *screen_tick_handler;
 #define PERSIST_KEY_HANDS_COLOR       207
 #define PERSIST_KEY_HANDS_OUTLINE_COLOR 208
 #define PERSIST_KEY_HANDS_THICKNESS   209
+#define PERSIST_KEY_BG_USE_CUSTOM     213
+#define PERSIST_KEY_BG_FILL_COLOR     210
+#define PERSIST_KEY_BG_MARKERS_COLOR  211
+#define PERSIST_KEY_BG_MARKERS_STYLE  212
 
 // Crash / lifecycle diagnostics keys
 #define PERSIST_KEY_LAST_LAUNCH_TS    300  // time_t of last init()
@@ -200,6 +205,15 @@ static bool    s_text_outline_enabled    = true;
 static uint8_t s_hands_color_argb        = 0xFF;
 static uint8_t s_hands_outline_color_argb = 0xC0;
 static uint8_t s_hands_thickness         = 1;  // 0=thin, 1=normal, 2=thick
+
+// Background customization (Emery only). When s_bg_use_custom is true,
+// we draw the watchface background and hour markers in code instead of
+// using the bgEmery.png resource — this lets the user pick the
+// background fill color, the marker color, and the marker style.
+static bool    s_bg_use_custom           = false;  // false = use PNG, true = code-drawn
+static uint8_t s_bg_fill_color_argb      = 0xC0;  // black background
+static uint8_t s_bg_markers_color_argb   = 0xFF;  // white markers
+static uint8_t s_bg_markers_style        = 0;     // 0=Arabic, 1=Roman, 2=Ticks
 static bool s_sound_enabled     = false;  // OFF by default — opt-in feature
 static uint8_t s_sound_volume   = 60;
 
@@ -642,6 +656,109 @@ static void tama_bg_update_proc(Layer *layer, GContext *ctx)
 #endif
 }
 
+#if defined(PBL_PLATFORM_EMERY)
+// Roman numeral strings for the 12 hour markers.
+static const char* const ROMAN_NUMERALS[12] = {
+  "XII", "I", "II", "III", "IV", "V",
+  "VI", "VII", "VIII", "IX", "X", "XI",
+};
+static const char* const ARABIC_NUMERALS[12] = {
+  "12", "1", "2", "3", "4", "5",
+  "6", "7", "8", "9", "10", "11",
+};
+
+// Hour-marker positions on the rectangular Emery face (200x228).
+// We don't put them on a circle — the central area is needed for the
+// digital time, battery, date, Tama LCD and analog hands. Instead, markers
+// sit along the four edges (top, right, bottom, left), mirroring the
+// original bgEmery.png layout. Each entry is the CENTER point of the
+// marker; the renderer draws a 36x22 text box centered on it.
+typedef struct {
+  int16_t x;
+  int16_t y;
+} marker_pos_t;
+static const marker_pos_t MARKER_POSITIONS[12] = {
+  /*  0 (12) */ { 100,  10 },
+  /*  1 ( 1) */ { 158,  10 },
+  /*  2 ( 2) */ { 184,  62 },
+  /*  3 ( 3) */ { 184, 114 },
+  /*  4 ( 4) */ { 184, 166 },
+  /*  5 ( 5) */ { 158, 215 },
+  /*  6 ( 6) */ { 100, 215 },
+  /*  7 ( 7) */ {  42, 215 },
+  /*  8 ( 8) */ {  16, 166 },
+  /*  9 ( 9) */ {  16, 114 },
+  /* 10 (10) */ {  16,  62 },
+  /* 11 (11) */ {  42,  10 },
+};
+
+#define BG_TICK_LENGTH      10  // length of a tick mark (px)
+#endif
+
+// Custom watchface background (Emery only). Fills the whole layer with
+// the user-chosen background color, then draws 12 hour markers along the
+// edges. Markers can be Arabic, Roman, or tick-marks depending on the
+// user setting.
+static void bg_custom_update_proc(Layer *layer, GContext *ctx)
+{
+#if defined(PBL_PLATFORM_EMERY)
+  GRect bounds = layer_get_bounds(layer);
+
+  GColor fill    = (GColor){.argb = s_bg_fill_color_argb};
+  GColor markers = (GColor){.argb = s_bg_markers_color_argb};
+
+  // Fill background
+  graphics_context_set_fill_color(ctx, fill);
+  graphics_fill_rect(ctx, bounds, 0, GCornerNone);
+
+  GFont marker_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+
+  for (int i = 0; i < 12; i++) {
+    int16_t mx = MARKER_POSITIONS[i].x;
+    int16_t my = MARKER_POSITIONS[i].y;
+
+    if (s_bg_markers_style == 2) {
+      // Tick marks: draw a short line at the marker position, oriented
+      // toward the nearest edge. Thicker for 12/3/6/9, thinner otherwise.
+      int width = (i % 3 == 0) ? 4 : 2;
+      graphics_context_set_stroke_color(ctx, markers);
+      graphics_context_set_stroke_width(ctx, width);
+
+      GPoint p1, p2;
+      // Determine orientation by which edge this marker sits on
+      if (i == 0 || i == 6) {
+        // Top/bottom center: vertical tick
+        p1 = GPoint(mx, my - BG_TICK_LENGTH / 2);
+        p2 = GPoint(mx, my + BG_TICK_LENGTH / 2);
+      } else if (i == 3 || i == 9) {
+        // Left/right center: horizontal tick
+        p1 = GPoint(mx - BG_TICK_LENGTH / 2, my);
+        p2 = GPoint(mx + BG_TICK_LENGTH / 2, my);
+      } else if (i == 1 || i == 11 || i == 5 || i == 7) {
+        // Corner positions on top/bottom rows: vertical tick
+        p1 = GPoint(mx, my - BG_TICK_LENGTH / 2);
+        p2 = GPoint(mx, my + BG_TICK_LENGTH / 2);
+      } else {
+        // Side positions (2, 4, 8, 10): horizontal tick
+        p1 = GPoint(mx - BG_TICK_LENGTH / 2, my);
+        p2 = GPoint(mx + BG_TICK_LENGTH / 2, my);
+      }
+      graphics_draw_line(ctx, p1, p2);
+    } else {
+      // Text label (Arabic or Roman). Center the text box on the marker
+      // point. Text frame is 32x22 (wide enough for "VIII").
+      const char* label = (s_bg_markers_style == 1)
+        ? ROMAN_NUMERALS[i] : ARABIC_NUMERALS[i];
+      GRect text_rect = GRect(mx - 16, my - 11, 32, 22);
+      graphics_context_set_text_color(ctx, markers);
+      graphics_draw_text(ctx, label, marker_font, text_rect,
+                         GTextOverflowModeWordWrap,
+                         GTextAlignmentCenter, NULL);
+    }
+  }
+#endif
+}
+
 // Analog clock hands (Emery only). Draws hour + minute hand rotating around
 // the screen center, with a black outline so they're visible over both the
 // black screen background and the white Tama-area background.
@@ -850,17 +967,55 @@ static void prv_inbox_received_handler(DictionaryIterator *iter, void *context) 
     customization_changed = true;
   }
 
+  Tuple *bg_use_custom_t = dict_find(iter, MESSAGE_KEY_BgUseCustom);
+  if (bg_use_custom_t) {
+    bool new_val = (bg_use_custom_t->value->int32 != 0);
+    if (new_val != s_bg_use_custom) {
+      // Toggling between PNG and custom requires recreating layers —
+      // simplest is to ask the user to relaunch the app. Persist the new
+      // value so the change takes effect on next start.
+      s_bg_use_custom = new_val;
+      persist_write_bool(PERSIST_KEY_BG_USE_CUSTOM, s_bg_use_custom);
+      APP_LOG(APP_LOG_LEVEL_INFO,
+              "BgUseCustom changed to %d -- restart app to apply",
+              (int)s_bg_use_custom);
+    }
+  }
+  Tuple *bg_fill_t = dict_find(iter, MESSAGE_KEY_BgFillColor);
+  if (bg_fill_t) {
+    s_bg_fill_color_argb = (uint8_t)bg_fill_t->value->int32;
+    persist_write_int(PERSIST_KEY_BG_FILL_COLOR, s_bg_fill_color_argb);
+    customization_changed = true;
+  }
+  Tuple *bg_markers_t = dict_find(iter, MESSAGE_KEY_BgMarkersColor);
+  if (bg_markers_t) {
+    s_bg_markers_color_argb = (uint8_t)bg_markers_t->value->int32;
+    persist_write_int(PERSIST_KEY_BG_MARKERS_COLOR, s_bg_markers_color_argb);
+    customization_changed = true;
+  }
+  Tuple *bg_style_t = dict_find(iter, MESSAGE_KEY_BgMarkersStyle);
+  if (bg_style_t) {
+    int v = bg_style_t->value->int32;
+    if (v < 0) v = 0; else if (v > 2) v = 2;
+    s_bg_markers_style = (uint8_t)v;
+    persist_write_int(PERSIST_KEY_BG_MARKERS_STYLE, v);
+    customization_changed = true;
+  }
+
   if (customization_changed) {
     // Re-render everything that uses these colors
     if (s_hands_layer) layer_mark_dirty(s_hands_layer);
+    if (s_bg_custom_layer) layer_mark_dirty(s_bg_custom_layer);
     update_clock_text();  // re-renders time + date text layers
     battery_handler(battery_state_service_peek());
     APP_LOG(APP_LOG_LEVEL_INFO,
-            "Customization updated: text=0x%02x outline=%d/0x%02x hands=0x%02x/0x%02x thick=%d",
+            "Customization updated: text=0x%02x outline=%d/0x%02x hands=0x%02x/0x%02x thick=%d bg=0x%02x markers=0x%02x style=%d",
             (int)s_text_color_argb, (int)s_text_outline_enabled,
             (int)s_text_outline_color_argb,
             (int)s_hands_color_argb, (int)s_hands_outline_color_argb,
-            (int)s_hands_thickness);
+            (int)s_hands_thickness,
+            (int)s_bg_fill_color_argb, (int)s_bg_markers_color_argb,
+            (int)s_bg_markers_style);
   }
 
   // handle incoming rom
@@ -1188,28 +1343,43 @@ static void main_window_load(Window *window) {
   // Get information about the Window
   Layer *window_layer = window_get_root_layer(window);
 
-  // Create GBitmap for background 
-#if defined(PBL_COLOR)
-  s_bitmap_bg = gbitmap_create_with_resource(RESOURCE_ID_BG_IMAGE);
-#else
-  s_bitmap_bg = gbitmap_create_with_resource(RESOURCE_ID_BG_IMAGE_BW);
-#endif
-
-  // Create background layer
-#if defined(PBL_PLATFORM_CHALK)
-  s_background_layer = bitmap_layer_create(GRect(0, 0, 180, 180));
-#elif defined(PBL_PLATFORM_GABBRO)
-    s_background_layer = bitmap_layer_create(GRect(0, 0, 260, 260));
-#elif defined(PBL_PLATFORM_EMERY)
+#if defined(PBL_PLATFORM_EMERY)
+  if (s_bg_use_custom) {
+    // Custom code-drawn background — fully configurable colors/markers.
+    GRect bg_bounds = GRect(0, 0, 200, 228);
+    s_bg_custom_layer = layer_create(bg_bounds);
+    layer_set_update_proc(s_bg_custom_layer, bg_custom_update_proc);
+    layer_add_child(window_layer, s_bg_custom_layer);
+    s_bitmap_bg = NULL;
+    s_background_layer = NULL;
+  } else {
+    // Classic PNG background (bgEmery.png).
+    s_bitmap_bg = gbitmap_create_with_resource(RESOURCE_ID_BG_IMAGE);
     s_background_layer = bitmap_layer_create(GRect(0, 0, 200, 228));
+    bitmap_layer_set_compositing_mode(s_background_layer, GCompOpSet);
+    bitmap_layer_set_bitmap(s_background_layer, s_bitmap_bg);
+    layer_add_child(window_layer, bitmap_layer_get_layer(s_background_layer));
+    s_bg_custom_layer = NULL;
+  }
 #else
+  // Other platforms always use their PNG background.
+  #if defined(PBL_COLOR)
+  s_bitmap_bg = gbitmap_create_with_resource(RESOURCE_ID_BG_IMAGE);
+  #else
+  s_bitmap_bg = gbitmap_create_with_resource(RESOURCE_ID_BG_IMAGE_BW);
+  #endif
+
+  #if defined(PBL_PLATFORM_CHALK)
+  s_background_layer = bitmap_layer_create(GRect(0, 0, 180, 180));
+  #elif defined(PBL_PLATFORM_GABBRO)
+  s_background_layer = bitmap_layer_create(GRect(0, 0, 260, 260));
+  #else
   s_background_layer = bitmap_layer_create(GRect(0, 0, 144, 168));
-#endif
+  #endif
   bitmap_layer_set_compositing_mode(s_background_layer, GCompOpSet);
   bitmap_layer_set_bitmap(s_background_layer, s_bitmap_bg);
-
-  // Add it as a child layer to the Window's root layer
   layer_add_child(window_layer, bitmap_layer_get_layer(s_background_layer));
+#endif
 
 #if defined(PBL_PLATFORM_EMERY)
   // White background rectangle behind the Tama LCD + menu icons area.
@@ -1446,9 +1616,21 @@ static void main_window_unload(Window *window) {
     s_tama_bg_layer = NULL;
   }
 
-  // Destroy backrgound bitmap and its layer
-  gbitmap_destroy(s_bitmap_bg);
-  bitmap_layer_destroy(s_background_layer);
+  // Destroy background bitmap and its layer (only allocated on non-Emery
+  // platforms — they're NULL otherwise).
+  if (s_bitmap_bg) {
+    gbitmap_destroy(s_bitmap_bg);
+    s_bitmap_bg = NULL;
+  }
+  if (s_background_layer) {
+    bitmap_layer_destroy(s_background_layer);
+    s_background_layer = NULL;
+  }
+  // Destroy custom background layer (Emery only)
+  if (s_bg_custom_layer) {
+    layer_destroy(s_bg_custom_layer);
+    s_bg_custom_layer = NULL;
+  }
 
   // Destroy text layer
   text_layer_destroy(s_text_layer);
@@ -1781,6 +1963,19 @@ static void loadSettingsFromPersist(void)
     int v = persist_read_int(PERSIST_KEY_HANDS_THICKNESS);
     if (v >= 0 && v <= 2) s_hands_thickness = (uint8_t)v;
   }
+  if (persist_exists(PERSIST_KEY_BG_USE_CUSTOM)) {
+    s_bg_use_custom = persist_read_bool(PERSIST_KEY_BG_USE_CUSTOM);
+  }
+  if (persist_exists(PERSIST_KEY_BG_FILL_COLOR)) {
+    s_bg_fill_color_argb = (uint8_t)persist_read_int(PERSIST_KEY_BG_FILL_COLOR);
+  }
+  if (persist_exists(PERSIST_KEY_BG_MARKERS_COLOR)) {
+    s_bg_markers_color_argb = (uint8_t)persist_read_int(PERSIST_KEY_BG_MARKERS_COLOR);
+  }
+  if (persist_exists(PERSIST_KEY_BG_MARKERS_STYLE)) {
+    int v = persist_read_int(PERSIST_KEY_BG_MARKERS_STYLE);
+    if (v >= 0 && v <= 2) s_bg_markers_style = (uint8_t)v;
+  }
 
   APP_LOG(APP_LOG_LEVEL_INFO,
           "Settings: embedded_rom=%d vibration=%d sound=%d vol=%d",
@@ -1794,6 +1989,10 @@ static void loadSettingsFromPersist(void)
           "Customization: hands=0x%02x/0x%02x thickness=%d",
           (int)s_hands_color_argb, (int)s_hands_outline_color_argb,
           (int)s_hands_thickness);
+  APP_LOG(APP_LOG_LEVEL_INFO,
+          "Customization: bg_use_custom=%d fill=0x%02x markers=0x%02x/style=%d",
+          (int)s_bg_use_custom, (int)s_bg_fill_color_argb,
+          (int)s_bg_markers_color_argb, (int)s_bg_markers_style);
 }
 
 // Save current state to local watch storage (persist API). Synchronous,
