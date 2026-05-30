@@ -173,6 +173,13 @@ module.exports = [
           { "label": "Roman numerals (I, II, III...)", "value": "1" },
           { "label": "Tick marks", "value": "2" }
         ]
+      },
+      {
+        "type": "toggle",
+        "messageKey": "IconsSmall",
+        "label": "Compact menu icons",
+        "description": "When ON, use smaller (18x15) menu icons for a tighter look. Takes effect after restarting the app.",
+        "defaultValue": false
       }
     ]
   },

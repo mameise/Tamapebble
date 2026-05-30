@@ -365,6 +365,9 @@ Pebble.addEventListener('webviewclosed',
         if (messageKeys.BgMarkersStyle in dict) {
             settingsMsg['BgMarkersStyle'] = parseInt(dict[messageKeys.BgMarkersStyle], 10);
         }
+        if (messageKeys.IconsSmall in dict) {
+            settingsMsg['IconsSmall'] = dict[messageKeys.IconsSmall] ? 1 : 0;
+        }
 
         if (Object.keys(settingsMsg).length > 0) {
             console.log("Forwarding settings to watch: " + JSON.stringify(settingsMsg));
