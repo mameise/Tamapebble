@@ -20,7 +20,6 @@
 //#include "rom.h" 
 
 static void initTamalib(void); 
-static void saveCurrentState(bool isAutoSave);
 static void saveCurrentStateAndQuit();
 static void autosave_timer_callback(void *data);
 static void rtc_sync_timer_callback(void *data);
@@ -1011,7 +1010,18 @@ static void prv_inbox_received_handler(DictionaryIterator *iter, void *context) 
     stateToLoad.flags = state_flags;
 
     stateToLoad.tick_counter = state_tick_counter;
-    stateToLoad.clk_timer_timestamp = state_clk_timer_timestamp;
+    // Phone state-loading: phone only sends one clk_timer_timestamp (legacy
+    // format from before the tamalib upgrade). Map it to the 2hz timer slot
+    // and zero the rest — the emulator will quickly re-derive correct
+    // timer phases once it starts running.
+    stateToLoad.clk_timer_2hz_timestamp = state_clk_timer_timestamp;
+    stateToLoad.clk_timer_4hz_timestamp = 0;
+    stateToLoad.clk_timer_8hz_timestamp = 0;
+    stateToLoad.clk_timer_16hz_timestamp = 0;
+    stateToLoad.clk_timer_32hz_timestamp = 0;
+    stateToLoad.clk_timer_64hz_timestamp = 0;
+    stateToLoad.clk_timer_128hz_timestamp = 0;
+    stateToLoad.clk_timer_256hz_timestamp = 0;
     stateToLoad.prog_timer_timestamp = state_prog_timer_timestamp;
     stateToLoad.prog_timer_enabled = state_prog_timer_enabled;
     stateToLoad.prog_timer_data = state_prog_timer_data;
@@ -1660,95 +1670,10 @@ static void init() {
   window_set_click_config_provider(s_main_window, click_config_provider);
 }
 
-static void saveCurrentState(bool isAutoSave)
-{
-  if (!s_hasReceivedRom)
-  {
-    if (!isAutoSave) Quit(); // manual save without rom: just quit
-    return; // auto-save without rom: skip silently
-  }
-
-  if (!isAutoSave) {
-    Message("Saving state...");
-  }
-  
-  APP_LOG(APP_LOG_LEVEL_DEBUG, "Getting save file and sending to phone... (autosave=%d)", (int)isAutoSave);
-
-  // Send save file to phone 
-  flat_state_t saveState = cpu_get_flat_state();
-
-  // Declare the dictionary's iterator
-  DictionaryIterator *out_iter;
-
-  // Prepare the outbox buffer for this message
-  AppMessageResult result = app_message_outbox_begin(&out_iter);
-  if(result == APP_MSG_OK) {
-    // Mark this message as auto-save so JS knows not to send JSFinishedSaving back
-    uint8_t autosave_flag = isAutoSave ? 1 : 0;
-    dict_write_int(out_iter, MESSAGE_KEY_AutoSave, &autosave_flag, sizeof(uint8_t), false);
-
-    // Construct the message
-    dict_write_int(out_iter, MESSAGE_KEY_STATEpc, &saveState.pc, sizeof(uint16_t), false);
-    dict_write_int(out_iter, MESSAGE_KEY_STATEx, &saveState.x, sizeof(uint16_t), false);
-    dict_write_int(out_iter, MESSAGE_KEY_STATEy, &saveState.y, sizeof(uint16_t), false);
-    dict_write_int(out_iter, MESSAGE_KEY_STATEa, &saveState.a, sizeof(uint8_t), false);
-    dict_write_int(out_iter, MESSAGE_KEY_STATEb, &saveState.b, sizeof(uint8_t), false);
-    dict_write_int(out_iter, MESSAGE_KEY_STATEnp, &saveState.np, sizeof(uint8_t), false);
-    dict_write_int(out_iter, MESSAGE_KEY_STATEsp, &saveState.sp, sizeof(uint8_t), false);
-    dict_write_int(out_iter, MESSAGE_KEY_STATEflags, &saveState.flags, sizeof(uint8_t), false);
-    
-    dict_write_int(out_iter, MESSAGE_KEY_STATEtick_counter, &saveState.tick_counter, sizeof(uint32_t), false);
-    dict_write_int(out_iter, MESSAGE_KEY_STATEclk_timer_timestamp, &saveState.clk_timer_timestamp, sizeof(uint32_t), false);
-    dict_write_int(out_iter, MESSAGE_KEY_STATEprog_timer_timestamp, &saveState.prog_timer_timestamp, sizeof(uint32_t), false);
-    dict_write_int(out_iter, MESSAGE_KEY_STATEprog_timer_enabled, &saveState.prog_timer_enabled, sizeof(uint8_t), false);
-    dict_write_int(out_iter, MESSAGE_KEY_STATEprog_timer_data, &saveState.prog_timer_data, sizeof(uint8_t), false);
-    dict_write_int(out_iter, MESSAGE_KEY_STATEprog_timer_rld, &saveState.prog_timer_rld, sizeof(uint8_t), false);
-    dict_write_int(out_iter, MESSAGE_KEY_STATEcall_depth, &saveState.call_depth, sizeof(uint32_t), false);
-
-    uint8_t interrupts[24] = {
-      saveState.interrupts[0].factor_flag_reg, saveState.interrupts[0].mask_reg, saveState.interrupts[0].triggered, saveState.interrupts[0].vector,
-      saveState.interrupts[1].factor_flag_reg, saveState.interrupts[1].mask_reg, saveState.interrupts[1].triggered, saveState.interrupts[1].vector,
-      saveState.interrupts[2].factor_flag_reg, saveState.interrupts[2].mask_reg, saveState.interrupts[2].triggered, saveState.interrupts[2].vector,
-      saveState.interrupts[3].factor_flag_reg, saveState.interrupts[3].mask_reg, saveState.interrupts[3].triggered, saveState.interrupts[3].vector,
-      saveState.interrupts[4].factor_flag_reg, saveState.interrupts[4].mask_reg, saveState.interrupts[4].triggered, saveState.interrupts[4].vector,
-      saveState.interrupts[5].factor_flag_reg, saveState.interrupts[5].mask_reg, saveState.interrupts[5].triggered, saveState.interrupts[5].vector,
-    };
-
-    dict_write_data(out_iter, MESSAGE_KEY_STATEinterrupts, interrupts, sizeof(interrupts));
-
-    dict_write_data(out_iter, MESSAGE_KEY_STATEmemory, saveState.memory, sizeof(saveState.memory));
-
-    // handle icons
-    dict_write_int(out_iter, MESSAGE_KEY_STATEselected_icon, &s_selectedIcon, sizeof(int8_t), true);
-    dict_write_int(out_iter, MESSAGE_KEY_STATEshowing_attention_icon, &s_showingAttentionIcon, sizeof(int8_t), true);
-
-     dict_write_end(out_iter);
-    // Send this message
-    result = app_message_outbox_send();
-
-    // Check the result
-    if(result != APP_MSG_OK) {
-      APP_LOG(APP_LOG_LEVEL_ERROR, "Error sending the outbox: %d", (int)result);
-      if (!isAutoSave) {
-        Message("Can't send state!"); //TODO handle better
-        Quit();
-      }
-      // auto-save failure: just log and try again next interval
-    }
-    else
-    {
-      APP_LOG(APP_LOG_LEVEL_DEBUG, "Save file sent successfully to phone! (autosave=%d)", (int)isAutoSave);
-      //for non-autosave: will wait for response from js to quit
-    }
-  } else {
-    // The outbox cannot be used right now
-    APP_LOG(APP_LOG_LEVEL_ERROR, "Error preparing the outbox: %d", (int)result);
-    if (!isAutoSave) {
-      Message("Can't send state!"); //TODO handle better
-      Quit();
-    }
-  }
-}
+// NOTE: the old `saveCurrentState(bool isAutoSave)` function that sent
+// state via AppMessage to the phone has been removed. We now save locally
+// to persist storage instead (see persistSaveState/saveCurrentStateAndQuit),
+// which is faster, more reliable, and works without Bluetooth.
 
 static void saveCurrentStateAndQuit()
 {
