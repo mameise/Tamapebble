@@ -1471,9 +1471,11 @@ static void main_window_load(Window *window) {
   // Pebble Time 2: 200x228 with clock face layout.
   // Digital time: centered, between top hour markers (12 row) and middle.
   // Battery + Date: in the band BELOW that, ABOVE the analog hand area.
+  // The y-offset (70 px) leaves ~8 px gap below the "10"/"2" markers
+  // which sit at y=62.
   s_time_layer    = text_layer_create(GRect(0,   26, 200, 30));
-  s_battery_layer = text_layer_create(GRect(35,  62,  70, 20));
-  s_date_layer    = text_layer_create(GRect(95,  62,  85, 20));
+  s_battery_layer = text_layer_create(GRect(35,  70,  70, 20));
+  s_date_layer    = text_layer_create(GRect(95,  70,  85, 20));
   GFont time_font    = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
   GFont small_font   = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
 #elif defined(PBL_PLATFORM_CHALK)
@@ -1526,8 +1528,8 @@ static void main_window_load(Window *window) {
   GFont        fonts[3]        = { time_font, small_font, small_font };
   GRect frames[3] = {
     GRect(0,   26, 200, 30),
-    GRect(35,  62,  70, 20),
-    GRect(95,  62,  85, 20),
+    GRect(35,  70,  70, 20),
+    GRect(95,  70,  85, 20),
   };
   GTextAlignment aligns_em[3] = {
     GTextAlignmentCenter, GTextAlignmentLeft, GTextAlignmentRight
