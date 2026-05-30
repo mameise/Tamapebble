@@ -54,7 +54,11 @@
             "TextOutlineColor",
             "HandsColor",
             "HandsOutlineColor",
-            "HandsThickness"
+            "HandsThickness",
+            "BgUseCustom",
+            "BgFillColor",
+            "BgMarkersColor",
+            "BgMarkersStyle"
         ],
         "projectType": "native",
         "resources": {
