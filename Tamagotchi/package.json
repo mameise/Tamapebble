@@ -58,7 +58,8 @@
             "BgUseCustom",
             "BgFillColor",
             "BgMarkersColor",
-            "BgMarkersStyle"
+            "BgMarkersStyle",
+            "IconsSmall"
         ],
         "projectType": "native",
         "resources": {
@@ -264,6 +265,70 @@
                     "targetPlatforms": [
                         "emery",
                         "gabbro"
+                    ]
+                },
+                {
+                    "file": "images/1_eg_sm.png",
+                    "name": "ICON1_SM",
+                    "type": "bitmap",
+                    "targetPlatforms": [
+                        "emery"
+                    ]
+                },
+                {
+                    "file": "images/2_eg_sm.png",
+                    "name": "ICON2_SM",
+                    "type": "bitmap",
+                    "targetPlatforms": [
+                        "emery"
+                    ]
+                },
+                {
+                    "file": "images/3_eg_sm.png",
+                    "name": "ICON3_SM",
+                    "type": "bitmap",
+                    "targetPlatforms": [
+                        "emery"
+                    ]
+                },
+                {
+                    "file": "images/4_eg_sm.png",
+                    "name": "ICON4_SM",
+                    "type": "bitmap",
+                    "targetPlatforms": [
+                        "emery"
+                    ]
+                },
+                {
+                    "file": "images/5_eg_sm.png",
+                    "name": "ICON5_SM",
+                    "type": "bitmap",
+                    "targetPlatforms": [
+                        "emery"
+                    ]
+                },
+                {
+                    "file": "images/6_eg_sm.png",
+                    "name": "ICON6_SM",
+                    "type": "bitmap",
+                    "targetPlatforms": [
+                        "emery"
+                    ]
+                },
+                {
+                    "file": "images/7_eg_sm.png",
+                    "name": "ICON7_SM",
+                    "type": "bitmap",
+                    "targetPlatforms": [
+                        "emery"
+                    ]
+                },
+                {
+                    "file": "images/8_eg_sm.png",
+                    "name": "ICON8_SM",
+                    "type": "bitmap",
+                    "targetPlatforms": [
+                        "emery"
                     ]
                 },
                 {
