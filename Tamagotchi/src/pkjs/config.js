@@ -138,6 +138,41 @@ module.exports = [
           { "label": "Normal", "value": "1" },
           { "label": "Thick", "value": "2" }
         ]
+      },
+      {
+        "type": "toggle",
+        "messageKey": "BgUseCustom",
+        "label": "Use custom watchface background",
+        "description": "When OFF, use the built-in bgEmery.png. When ON, draw the background and hour markers in code so you can pick colors and style below. Takes effect after restarting the app.",
+        "defaultValue": false
+      },
+      {
+        "type": "color",
+        "messageKey": "BgFillColor",
+        "label": "Watchface background color",
+        "description": "Only used when 'Use custom watchface background' is ON.",
+        "defaultValue": "0x000000",
+        "sunlight": false
+      },
+      {
+        "type": "color",
+        "messageKey": "BgMarkersColor",
+        "label": "Hour markers color",
+        "description": "Only used when 'Use custom watchface background' is ON.",
+        "defaultValue": "0xFFFFFF",
+        "sunlight": false
+      },
+      {
+        "type": "select",
+        "messageKey": "BgMarkersStyle",
+        "label": "Hour markers style",
+        "description": "Only used when 'Use custom watchface background' is ON.",
+        "defaultValue": "0",
+        "options": [
+          { "label": "Arabic numerals (1, 2, 3...)", "value": "0" },
+          { "label": "Roman numerals (I, II, III...)", "value": "1" },
+          { "label": "Tick marks", "value": "2" }
+        ]
       }
     ]
   },

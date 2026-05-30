@@ -353,6 +353,18 @@ Pebble.addEventListener('webviewclosed',
         if (messageKeys.HandsThickness in dict) {
             settingsMsg['HandsThickness'] = parseInt(dict[messageKeys.HandsThickness], 10);
         }
+        if (messageKeys.BgUseCustom in dict) {
+            settingsMsg['BgUseCustom'] = dict[messageKeys.BgUseCustom] ? 1 : 0;
+        }
+        if (messageKeys.BgFillColor in dict) {
+            settingsMsg['BgFillColor'] = rgbToArgb8(dict[messageKeys.BgFillColor]);
+        }
+        if (messageKeys.BgMarkersColor in dict) {
+            settingsMsg['BgMarkersColor'] = rgbToArgb8(dict[messageKeys.BgMarkersColor]);
+        }
+        if (messageKeys.BgMarkersStyle in dict) {
+            settingsMsg['BgMarkersStyle'] = parseInt(dict[messageKeys.BgMarkersStyle], 10);
+        }
 
         if (Object.keys(settingsMsg).length > 0) {
             console.log("Forwarding settings to watch: " + JSON.stringify(settingsMsg));
