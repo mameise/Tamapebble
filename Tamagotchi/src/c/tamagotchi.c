@@ -562,8 +562,8 @@ static void icons_update_proc(Layer *layer, GContext *ctx) {
     uint8_t icon_h   = s_icons_small ? 15 : 22;
     uint8_t step     = s_icons_small ? 22 : 30;
     uint8_t start_x  = s_icons_small ? 58 : 41;
-    uint8_t y_top    = s_icons_small ? 121 : 118;
-    uint8_t y_bottom = s_icons_small ? 185 : 176;
+    uint8_t y_top    = s_icons_small ? 125 : 118;
+    uint8_t y_bottom = s_icons_small ? 176 : 176;
     uint8_t xPos = start_x + ((s_selectedIcon % 4) * step);
     uint8_t yPos = (s_selectedIcon > 3 ? y_bottom : y_top);
     #elif defined(PBL_PLATFORM_GABBRO)
@@ -618,7 +618,7 @@ static void icons_update_proc(Layer *layer, GContext *ctx) {
     uint8_t icon_h_a   = s_icons_small ? 15 : 22;
     uint8_t step_a     = s_icons_small ? 22 : 30;
     uint8_t start_x_a  = s_icons_small ? 58 : 41;
-    uint8_t y_bottom_a = s_icons_small ? 185 : 176;
+    uint8_t y_bottom_a = s_icons_small ? 176 : 176;
     graphics_draw_bitmap_in_rect(ctx, s_bitmap_icon8,
       GRect(start_x_a + 3*step_a, y_bottom_a, icon_w_a, icon_h_a));
     #elif defined(PBL_PLATFORM_GABBRO)
@@ -647,10 +647,13 @@ static void tama_bg_update_proc(Layer *layer, GContext *ctx)
   //   Icons span absolute x=41..158     -> local x=6..123
   //
   // Compact icons (18x15):
-  //   Top icons at absolute y=121..136  -> local y=11..26
+  //   Top icons at absolute y=125..140  -> local y=15..30
   //   Tama LCD at absolute y=142..174   -> local y=32..64
-  //   Bot icons at absolute y=185..200  -> local y=75..90
+  //   Bot icons at absolute y=176..191  -> local y=66..81
   //   Icons span absolute x=58..142     -> local x=23..107
+  //
+  // Top and bottom gaps to the Tama LCD are 2px in both icon-size modes,
+  // matching the original (default) layout — keeps everything tight.
 
   bool icon_top_active    = (s_selectedIcon >= 0 && s_selectedIcon <= 3);
   bool icon_bottom_active = (s_selectedIcon >= 4 && s_selectedIcon <= 7);
@@ -662,8 +665,8 @@ static void tama_bg_update_proc(Layer *layer, GContext *ctx)
   int top, bottom, left, right;
 
   if (s_icons_small) {
-    top    = need_top    ? 7  : 28;
-    bottom = need_bottom ? 94 : 68;
+    top    = need_top    ? 11 : 28;
+    bottom = need_bottom ? 85 : 68;
     if (need_wide) {
       // Cover compact icon row (local x=23..107) with a small margin
       left  = 20;
