@@ -2,10 +2,10 @@
 #define FPS 20
 #define FPS_DELAY 1000/FPS //ms
 #define STEP_DELAY 1 //ms
-// Reduced from Stefan's 600 to lower CPU load. The Tama CPU runs at ~32kHz
-// natively; even at 400 steps/ms the emulated CPU runs much faster than
-// needed. RTC sync periodically nudges the Tama clock back to reality so
-// emulation speed doesn't have to be precise.
+// Moderate reduction from Stefan's 600. CPU load itself isn't the main
+// crash cause (crashes happen even with very low load) — the issue is
+// CPU activity colliding with the backlight ramp-up on Pebble Time 2.
+// That's handled separately via the tap-aware throttling in milli_tick.
 #define STEPS_PER_DELAY 400
 
 #define VRAM_SIZE (64 + 13)
@@ -127,20 +127,30 @@ typedef enum {
   ACT_INBOX_SETTINGS   = 7,
   ACT_CLOCK_UPDATE     = 8,
   ACT_HANDS_REDRAW     = 9,
+  // Finer-grained markers for individual render paths so we can pinpoint
+  // exactly which layer's update_proc was running when a crash happens.
+  ACT_DRAW_SCREEN_PROC = 10,
+  ACT_DRAW_HANDS_PROC  = 11,
+  ACT_DRAW_TAMA_BG     = 12,
+  ACT_DRAW_ICONS       = 13,
 } ActivityMarker;
 
 static const char* activity_name(int a) {
   switch (a) {
-    case ACT_TAMALIB_STEP:    return "TAMALIB_STEP";
-    case ACT_SCREEN_UPDATE:   return "SCREEN_UPDATE";
-    case ACT_AUTOSAVE:        return "AUTOSAVE";
-    case ACT_RTC_SYNC:        return "RTC_SYNC";
-    case ACT_INBOX_ROM:       return "INBOX_ROM";
-    case ACT_INBOX_STATE:     return "INBOX_STATE";
-    case ACT_INBOX_SETTINGS:  return "INBOX_SETTINGS";
-    case ACT_CLOCK_UPDATE:    return "CLOCK_UPDATE";
-    case ACT_HANDS_REDRAW:    return "HANDS_REDRAW";
-    default:                  return "NONE";
+    case ACT_TAMALIB_STEP:     return "TAMALIB_STEP";
+    case ACT_SCREEN_UPDATE:    return "SCREEN_UPDATE";
+    case ACT_AUTOSAVE:         return "AUTOSAVE";
+    case ACT_RTC_SYNC:         return "RTC_SYNC";
+    case ACT_INBOX_ROM:        return "INBOX_ROM";
+    case ACT_INBOX_STATE:      return "INBOX_STATE";
+    case ACT_INBOX_SETTINGS:   return "INBOX_SETTINGS";
+    case ACT_CLOCK_UPDATE:     return "CLOCK_UPDATE";
+    case ACT_HANDS_REDRAW:     return "HANDS_REDRAW";
+    case ACT_DRAW_SCREEN_PROC: return "DRAW_SCREEN_PROC";
+    case ACT_DRAW_HANDS_PROC:  return "DRAW_HANDS_PROC";
+    case ACT_DRAW_TAMA_BG:     return "DRAW_TAMA_BG";
+    case ACT_DRAW_ICONS:       return "DRAW_ICONS";
+    default:                   return "NONE";
   }
 }
 
@@ -150,31 +160,29 @@ static const char* activity_name(int a) {
 //     once per ~10s.
 //   - "rare" activities (AUTOSAVE, RTC_SYNC, INBOX_*) are persisted
 //     immediately so we capture them precisely if a crash happens during one.
+// Set activity marker. We track the *most recent* activity in memory
+// (no flash write each frame), and periodically flush it to persist storage
+// every 10 seconds. On crash, the most recent flushed value tells us roughly
+// what the app was doing — accurate to within ~10s, which is enough to
+// pinpoint the problematic code path.
 static void set_activity(ActivityMarker act) {
   static int s_current_activity = -1;
   static int s_last_persisted_activity = -1;
-  static int s_prev_persisted_activity = -1;
   static time_t s_last_persist_write = 0;
 
   if (act == s_current_activity) return;
   s_current_activity = act;
 
-  bool is_rare = (act == ACT_AUTOSAVE || act == ACT_RTC_SYNC ||
-                  act == ACT_INBOX_ROM || act == ACT_INBOX_STATE ||
-                  act == ACT_INBOX_SETTINGS || act == ACT_CLOCK_UPDATE);
-
   time_t now = time(NULL);
-  if (is_rare || (now - s_last_persist_write >= 10)) {
-    if (act != s_last_persisted_activity) {
-      // Move current to previous before overwriting
-      if (s_last_persisted_activity >= 0) {
-        s_prev_persisted_activity = s_last_persisted_activity;
-        persist_write_int(PERSIST_KEY_PREV_ACTIVITY, s_prev_persisted_activity);
-      }
-      persist_write_int(PERSIST_KEY_LAST_ACTIVITY, (int)act);
-      s_last_persisted_activity = act;
-      s_last_persist_write = now;
+  // Persist on every change, but throttle to once per 10s for flash wear
+  if (now - s_last_persist_write >= 10 && act != s_last_persisted_activity) {
+    // Track previous for diagnostics
+    if (s_last_persisted_activity >= 0) {
+      persist_write_int(PERSIST_KEY_PREV_ACTIVITY, s_last_persisted_activity);
     }
+    persist_write_int(PERSIST_KEY_LAST_ACTIVITY, (int)act);
+    s_last_persisted_activity = act;
+    s_last_persist_write = now;
   }
 }
 #define PERSIST_KEY_SOUND_ENABLED     202
@@ -217,7 +225,10 @@ static AppTimer *s_autosave_timer = NULL;
 #define PERSIST_KEY_STATE_MEM2    103  // second half of memory[]
 #define PERSIST_KEY_ICONS         104  // selected_icon + showing_attention_icon
 
-#define PERSIST_MAGIC_VALUE       0x54414D41  // 'TAMA' in ASCII
+// Bumped from 0x54414D41 ('TAMA') when we upgraded to the newer upstream
+// tamalib (more fields in flat_state_t — old saves are not migrate-able).
+// Any old persisted state will be ignored on first start with this build.
+#define PERSIST_MAGIC_VALUE       0x54414D42  // 'TAMB' = 'TAMA' v2
 #define PERSIST_VERSION           1
 
 static void Quit()
@@ -498,10 +509,9 @@ static void on_button_down_release(ClickRecognizerRef recognizer, void *context)
 
 static void on_button_back(ClickRecognizerRef recognizer, void *context) //back
 {
-  // Always persist locally first (fast, synchronous, guaranteed).
-  // Then trigger the JS save+quit flow (which goes through phone roundtrip).
-  persistSaveState();
-  saveCurrentStateAndQuit(); 
+  // saveCurrentStateAndQuit() now persists locally and quits — no phone
+  // roundtrip needed, works even with Bluetooth off.
+  saveCurrentStateAndQuit();
 }
 
 static void click_config_provider(void *context) {
@@ -515,6 +525,7 @@ static void click_config_provider(void *context) {
 
 // Handles drawing icons layers
 static void icons_update_proc(Layer *layer, GContext *ctx) {
+  set_activity(ACT_DRAW_ICONS);
   // Set the draw color
   graphics_context_set_fill_color(ctx, GColorBlack);
 
@@ -594,6 +605,7 @@ static void icons_update_proc(Layer *layer, GContext *ctx) {
 static void tama_bg_update_proc(Layer *layer, GContext *ctx)
 {
 #if defined(PBL_PLATFORM_EMERY)
+  set_activity(ACT_DRAW_TAMA_BG);
   // Layer is at absolute (35, 110), size 130x96. Local coords:
   //   Tama LCD at absolute (68, 142, 64, 32) -> local (33, 32, 64, 32)
   //   Top icons at absolute y=118..140 -> local y=8..30
@@ -637,6 +649,7 @@ static void tama_bg_update_proc(Layer *layer, GContext *ctx)
 static void hands_update_proc(Layer *layer, GContext *ctx)
 {
 #if defined(PBL_PLATFORM_EMERY)
+  set_activity(ACT_DRAW_HANDS_PROC);
   GRect bounds = layer_get_bounds(layer);
   GPoint center = GPoint(bounds.size.w / 2, bounds.size.h / 2);
 
@@ -702,6 +715,7 @@ static void hands_update_proc(Layer *layer, GContext *ctx)
 
 // Handles drawing screen layer
 static void screen_update_proc(Layer *layer, GContext *ctx) { 
+  set_activity(ACT_DRAW_SCREEN_PROC);
   // draw new screen
   graphics_context_set_fill_color(ctx, GColorBlack);
 
@@ -1367,6 +1381,7 @@ static void main_window_load(Window *window) {
   // Initial values + subscriptions
   battery_state_service_subscribe(battery_handler);
   battery_handler(battery_state_service_peek());
+
   update_clock_text();
   schedule_next_clock_update();
 
@@ -1737,7 +1752,19 @@ static void saveCurrentState(bool isAutoSave)
 
 static void saveCurrentStateAndQuit()
 {
-  saveCurrentState(false);
+  // Manual exit: save locally to watch persist storage (fast, reliable,
+  // works without Bluetooth) and quit. We don't bother trying to send
+  // state to the phone here — the local save is sufficient since we
+  // boot from local storage on next startup. The auto-save timer also
+  // keeps the local state fresh while the app is running.
+  if (s_hasReceivedRom && s_hasReceivedSaveFile) {
+    if (persistSaveState()) {
+      APP_LOG(APP_LOG_LEVEL_INFO, "Manual exit: state saved to watch storage");
+    } else {
+      APP_LOG(APP_LOG_LEVEL_WARNING, "Manual exit: persistSaveState failed");
+    }
+  }
+  Quit();
 }
 
 // Load ROM from app resource (built-in, no phone needed).
@@ -1869,6 +1896,9 @@ static bool persistSaveState(void)
 
   // Header: everything except the memory[] array.
   // Order/packing: explicit struct so layout is stable across builds.
+  // NOTE: layout must match the new upstream tamalib (multiple clock-timer
+  //       timestamps, cpu_halted flag). Old saves (header format from the
+  //       2021 tamalib) are not compatible — magic value bump handles that.
   typedef struct __attribute__((packed)) {
     uint16_t pc;
     uint16_t x;
@@ -1879,12 +1909,20 @@ static bool persistSaveState(void)
     uint8_t  sp;
     uint8_t  flags;
     uint32_t tick_counter;
-    uint32_t clk_timer_timestamp;
+    uint32_t clk_timer_2hz_timestamp;
+    uint32_t clk_timer_4hz_timestamp;
+    uint32_t clk_timer_8hz_timestamp;
+    uint32_t clk_timer_16hz_timestamp;
+    uint32_t clk_timer_32hz_timestamp;
+    uint32_t clk_timer_64hz_timestamp;
+    uint32_t clk_timer_128hz_timestamp;
+    uint32_t clk_timer_256hz_timestamp;
     uint32_t prog_timer_timestamp;
     uint8_t  prog_timer_enabled;
     uint8_t  prog_timer_data;
     uint8_t  prog_timer_rld;
     uint32_t call_depth;
+    uint8_t  cpu_halted;
     // 6 interrupts × 4 bytes each = 24 bytes
     uint8_t  interrupts[24];
   } persist_header_t;
@@ -1899,12 +1937,20 @@ static bool persistSaveState(void)
   hdr.sp = st.sp;
   hdr.flags = st.flags;
   hdr.tick_counter = st.tick_counter;
-  hdr.clk_timer_timestamp = st.clk_timer_timestamp;
+  hdr.clk_timer_2hz_timestamp = st.clk_timer_2hz_timestamp;
+  hdr.clk_timer_4hz_timestamp = st.clk_timer_4hz_timestamp;
+  hdr.clk_timer_8hz_timestamp = st.clk_timer_8hz_timestamp;
+  hdr.clk_timer_16hz_timestamp = st.clk_timer_16hz_timestamp;
+  hdr.clk_timer_32hz_timestamp = st.clk_timer_32hz_timestamp;
+  hdr.clk_timer_64hz_timestamp = st.clk_timer_64hz_timestamp;
+  hdr.clk_timer_128hz_timestamp = st.clk_timer_128hz_timestamp;
+  hdr.clk_timer_256hz_timestamp = st.clk_timer_256hz_timestamp;
   hdr.prog_timer_timestamp = st.prog_timer_timestamp;
   hdr.prog_timer_enabled = st.prog_timer_enabled;
   hdr.prog_timer_data = st.prog_timer_data;
   hdr.prog_timer_rld = st.prog_timer_rld;
   hdr.call_depth = st.call_depth;
+  hdr.cpu_halted = st.cpu_halted;
   for (int i = 0; i < 6; i++) {
     hdr.interrupts[i*4+0] = st.interrupts[i].factor_flag_reg;
     hdr.interrupts[i*4+1] = st.interrupts[i].mask_reg;
@@ -1970,12 +2016,20 @@ static bool persistLoadState(void)
     uint16_t pc; uint16_t x; uint16_t y;
     uint8_t  a; uint8_t b; uint8_t np; uint8_t sp; uint8_t flags;
     uint32_t tick_counter;
-    uint32_t clk_timer_timestamp;
+    uint32_t clk_timer_2hz_timestamp;
+    uint32_t clk_timer_4hz_timestamp;
+    uint32_t clk_timer_8hz_timestamp;
+    uint32_t clk_timer_16hz_timestamp;
+    uint32_t clk_timer_32hz_timestamp;
+    uint32_t clk_timer_64hz_timestamp;
+    uint32_t clk_timer_128hz_timestamp;
+    uint32_t clk_timer_256hz_timestamp;
     uint32_t prog_timer_timestamp;
     uint8_t  prog_timer_enabled;
     uint8_t  prog_timer_data;
     uint8_t  prog_timer_rld;
     uint32_t call_depth;
+    uint8_t  cpu_halted;
     uint8_t  interrupts[24];
   } persist_header_t;
 
@@ -1995,12 +2049,20 @@ static bool persistLoadState(void)
   stateToLoad.sp = hdr.sp;
   stateToLoad.flags = hdr.flags;
   stateToLoad.tick_counter = hdr.tick_counter;
-  stateToLoad.clk_timer_timestamp = hdr.clk_timer_timestamp;
+  stateToLoad.clk_timer_2hz_timestamp   = hdr.clk_timer_2hz_timestamp;
+  stateToLoad.clk_timer_4hz_timestamp   = hdr.clk_timer_4hz_timestamp;
+  stateToLoad.clk_timer_8hz_timestamp   = hdr.clk_timer_8hz_timestamp;
+  stateToLoad.clk_timer_16hz_timestamp  = hdr.clk_timer_16hz_timestamp;
+  stateToLoad.clk_timer_32hz_timestamp  = hdr.clk_timer_32hz_timestamp;
+  stateToLoad.clk_timer_64hz_timestamp  = hdr.clk_timer_64hz_timestamp;
+  stateToLoad.clk_timer_128hz_timestamp = hdr.clk_timer_128hz_timestamp;
+  stateToLoad.clk_timer_256hz_timestamp = hdr.clk_timer_256hz_timestamp;
   stateToLoad.prog_timer_timestamp = hdr.prog_timer_timestamp;
   stateToLoad.prog_timer_enabled = hdr.prog_timer_enabled;
   stateToLoad.prog_timer_data = hdr.prog_timer_data;
   stateToLoad.prog_timer_rld = hdr.prog_timer_rld;
   stateToLoad.call_depth = hdr.call_depth;
+  stateToLoad.cpu_halted = hdr.cpu_halted;
   for (int i = 0; i < 6; i++) {
     stateToLoad.interrupts[i].factor_flag_reg = hdr.interrupts[i*4+0];
     stateToLoad.interrupts[i].mask_reg        = hdr.interrupts[i*4+1];
