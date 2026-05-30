@@ -2034,7 +2034,8 @@ void cpu_release(void)
 int cpu_step(void)
 {
 	u12_t op;
-	u8_t i;
+	u8_t i = 0;  /* init to 0 so the interrupt-pending check at the end is
+	                well-defined when cpu_halted is true (no op was executed) */
 	breakpoint_t *bp = g_breakpoints;
 	static u8_t previous_cycles = 0;
 
