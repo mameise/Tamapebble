@@ -60,7 +60,7 @@
             "BgMarkersColor",
             "BgMarkersStyle",
             "IconsSmall",
-            "TamaInvert",
+            "TamaPixelColor",
             "TamaBgColor",
             "TamaBgEnabled"
         ],
