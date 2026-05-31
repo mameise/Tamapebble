@@ -180,6 +180,28 @@ module.exports = [
         "label": "Compact menu icons",
         "description": "When ON, use smaller (18x15) menu icons for a tighter look. Takes effect after restarting the app.",
         "defaultValue": false
+      },
+      {
+        "type": "toggle",
+        "messageKey": "TamaBgEnabled",
+        "label": "Show Tama background",
+        "description": "When OFF, the white/colored rounded background behind the Tama and menu icons disappears, showing the watchface background directly.",
+        "defaultValue": true
+      },
+      {
+        "type": "color",
+        "messageKey": "TamaBgColor",
+        "label": "Tama background color",
+        "description": "Color of the rounded area behind the Tama LCD and menu icons. Only used when 'Show Tama background' is ON.",
+        "defaultValue": "0xFFFFFF",
+        "sunlight": false
+      },
+      {
+        "type": "toggle",
+        "messageKey": "TamaInvert",
+        "label": "Invert Tama (negative)",
+        "description": "When ON, the Tama LCD pixels and menu icons are drawn in white instead of black. The background color is independent.",
+        "defaultValue": false
       }
     ]
   },

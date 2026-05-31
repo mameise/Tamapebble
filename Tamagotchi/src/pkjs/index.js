@@ -368,6 +368,15 @@ Pebble.addEventListener('webviewclosed',
         if (messageKeys.IconsSmall in dict) {
             settingsMsg['IconsSmall'] = dict[messageKeys.IconsSmall] ? 1 : 0;
         }
+        if (messageKeys.TamaInvert in dict) {
+            settingsMsg['TamaInvert'] = dict[messageKeys.TamaInvert] ? 1 : 0;
+        }
+        if (messageKeys.TamaBgColor in dict) {
+            settingsMsg['TamaBgColor'] = rgbToArgb8(dict[messageKeys.TamaBgColor]);
+        }
+        if (messageKeys.TamaBgEnabled in dict) {
+            settingsMsg['TamaBgEnabled'] = dict[messageKeys.TamaBgEnabled] ? 1 : 0;
+        }
 
         if (Object.keys(settingsMsg).length > 0) {
             console.log("Forwarding settings to watch: " + JSON.stringify(settingsMsg));
