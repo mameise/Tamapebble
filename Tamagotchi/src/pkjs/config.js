@@ -200,7 +200,7 @@ module.exports = [
         "type": "toggle",
         "messageKey": "TamaInvert",
         "label": "Invert Tama (negative)",
-        "description": "When ON, the Tama LCD pixels and menu icons are drawn in white instead of black. The background color is independent.",
+        "description": "When ON, the Tama LCD pixels and menu icons are drawn in white instead of black. The background color is independent. Takes effect after restarting the app.",
         "defaultValue": false
       }
     ]
