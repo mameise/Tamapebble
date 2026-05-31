@@ -59,7 +59,10 @@
             "BgFillColor",
             "BgMarkersColor",
             "BgMarkersStyle",
-            "IconsSmall"
+            "IconsSmall",
+            "TamaInvert",
+            "TamaBgColor",
+            "TamaBgEnabled"
         ],
         "projectType": "native",
         "resources": {
