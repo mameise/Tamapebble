@@ -368,8 +368,8 @@ Pebble.addEventListener('webviewclosed',
         if (messageKeys.IconsSmall in dict) {
             settingsMsg['IconsSmall'] = dict[messageKeys.IconsSmall] ? 1 : 0;
         }
-        if (messageKeys.TamaInvert in dict) {
-            settingsMsg['TamaInvert'] = dict[messageKeys.TamaInvert] ? 1 : 0;
+        if (messageKeys.TamaPixelColor in dict) {
+            settingsMsg['TamaPixelColor'] = rgbToArgb8(dict[messageKeys.TamaPixelColor]);
         }
         if (messageKeys.TamaBgColor in dict) {
             settingsMsg['TamaBgColor'] = rgbToArgb8(dict[messageKeys.TamaBgColor]);

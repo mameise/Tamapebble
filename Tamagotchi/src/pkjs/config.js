@@ -197,11 +197,12 @@ module.exports = [
         "sunlight": false
       },
       {
-        "type": "toggle",
-        "messageKey": "TamaInvert",
-        "label": "Invert Tama (negative)",
-        "description": "When ON, the Tama LCD pixels and menu icons are drawn in white instead of black. The background color is independent. Takes effect after restarting the app.",
-        "defaultValue": false
+        "type": "color",
+        "messageKey": "TamaPixelColor",
+        "label": "Tama pixel & icons color",
+        "description": "Color for the Tama LCD pixels and the menu icons. Default black. Pick white for an inverted/OLED look, or any other color for a custom palette. Changing this needs an app restart to recolor the icons.",
+        "defaultValue": "0x000000",
+        "sunlight": false
       }
     ]
   },
