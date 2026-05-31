@@ -1453,44 +1453,77 @@ static void battery_handler(BatteryChargeState state)
   sync_shadow_text(s_battery_shadow, s_battery_text);
 }
 
-// Pixel-by-pixel invert of a GBitmap, for icons in inverted-Tama mode.
-// Pebble's GCompOpAssignInverted doesn't work right for palettized
-// bitmaps with alpha — it inverts the alpha channel too, leaving the
-// icon as a solid block instead of just flipping black<->white. We
-// handle this manually: walk every pixel, and if it's opaque, swap
-// black<->white while keeping the alpha. Transparent pixels are left
-// alone. Works for both 1-bit and 8-bit Pebble bitmap formats.
+// Invert the visible (opaque) colors of a GBitmap so it renders as a
+// "negative" of itself, keeping transparency intact.
+//
+// On the Pebble compiler the icons are stored in whatever GBitmapFormat
+// is smallest for the source PNG — usually GBitmapFormat1BitPalette or
+// 2BitPalette for our black-on-transparent menu icons, and only in rare
+// cases GBitmapFormat8Bit. In palettized formats the pixel data is just
+// indices into a small palette; the actual colors live in the palette
+// itself. So inverting "the bitmap" means inverting either the palette
+// (palettized formats) or the raw pixel data (8-bit).
+//
+// We previously tried GCompOpAssignInverted at draw time, but on color
+// Pebbles it inverts the alpha channel too, which makes the icons
+// disappear into the background. Doing the invert once at load time
+// here works around that.
 static void invert_bitmap_in_place(GBitmap *bmp)
 {
 #if defined(PBL_COLOR)
   if (!bmp) return;
-  GRect bounds = gbitmap_get_bounds(bmp);
   GBitmapFormat fmt = gbitmap_get_format(bmp);
-  if (fmt != GBitmapFormat8Bit && fmt != GBitmapFormat8BitCircular) {
-    // Other formats (1-bit etc.) handled differently — for our PNG-derived
-    // icons on Emery this branch shouldn't run. Skip safely.
-    return;
-  }
-  uint8_t *data = gbitmap_get_data(bmp);
-  uint16_t stride = gbitmap_get_bytes_per_row(bmp);
-  for (int16_t y = 0; y < bounds.size.h; y++) {
-    uint8_t *row = data + (y * stride);
-    for (int16_t x = 0; x < bounds.size.w; x++) {
-      uint8_t argb = row[x];
-      uint8_t a = (argb >> 6) & 0x3;
-      // Only invert visible (opaque or partially opaque) pixels.
-      // Pixel format: AARRGGBB (2 bits each).
-      if (a > 0) {
-        uint8_t r = (argb >> 4) & 0x3;
-        uint8_t g = (argb >> 2) & 0x3;
-        uint8_t b = argb & 0x3;
-        r = 3 - r;
-        g = 3 - g;
-        b = 3 - b;
-        row[x] = (a << 6) | (r << 4) | (g << 2) | b;
+
+  // Helper: invert just the visible (alpha > 0) entries of an argb8 byte.
+  // GColor argb8 layout: AARRGGBB (2 bits each).
+  #define INVERT_ARGB8(argb) do {                                         \
+    uint8_t _a = ((argb) >> 6) & 0x3;                                     \
+    if (_a > 0) {                                                         \
+      uint8_t _r = ((argb) >> 4) & 0x3;                                   \
+      uint8_t _g = ((argb) >> 2) & 0x3;                                   \
+      uint8_t _b = (argb) & 0x3;                                          \
+      (argb) = (_a << 6) | ((3 - _r) << 4) | ((3 - _g) << 2) | (3 - _b);  \
+    }                                                                     \
+  } while (0)
+
+  switch (fmt) {
+    case GBitmapFormat1BitPalette:
+    case GBitmapFormat2BitPalette:
+    case GBitmapFormat4BitPalette: {
+      // Palettized: invert each color in the palette. Palette size is
+      // 2^(bits-per-pixel) entries, each one byte of argb8.
+      GColor *palette = gbitmap_get_palette(bmp);
+      if (!palette) return;
+      int n_entries = (fmt == GBitmapFormat1BitPalette) ? 2 :
+                      (fmt == GBitmapFormat2BitPalette) ? 4 : 16;
+      for (int i = 0; i < n_entries; i++) {
+        INVERT_ARGB8(palette[i].argb);
       }
+      break;
     }
+    case GBitmapFormat8Bit:
+    case GBitmapFormat8BitCircular: {
+      // 8-bit ARGB: invert every visible pixel directly.
+      GRect bounds = gbitmap_get_bounds(bmp);
+      uint8_t *data = gbitmap_get_data(bmp);
+      uint16_t stride = gbitmap_get_bytes_per_row(bmp);
+      for (int16_t y = 0; y < bounds.size.h; y++) {
+        uint8_t *row = data + (y * stride);
+        for (int16_t x = 0; x < bounds.size.w; x++) {
+          INVERT_ARGB8(row[x]);
+        }
+      }
+      break;
+    }
+    default:
+      // 1-bit (non-palettized) is just bits; not used for our color icons.
+      // Skip silently rather than risk corrupting unrelated bitmap formats.
+      APP_LOG(APP_LOG_LEVEL_WARNING,
+              "invert_bitmap_in_place: unhandled format %d", (int)fmt);
+      break;
   }
+
+  #undef INVERT_ARGB8
 #endif
 }
 
@@ -1587,6 +1620,11 @@ static void main_window_load(Window *window) {
   // which on color Pebbles incorrectly inverts the alpha channel and makes
   // the icons unreadable.
   if (s_tama_invert) {
+    // Log the actual format so we know which code path we exercise.
+    APP_LOG(APP_LOG_LEVEL_INFO,
+            "Icon bitmap format: %d (1=1Bit, 2=8Bit, 3=1BitPalette, "
+            "4=2BitPalette, 5=4BitPalette)",
+            (int)gbitmap_get_format(s_bitmap_icon1));
     invert_bitmap_in_place(s_bitmap_icon1);
     invert_bitmap_in_place(s_bitmap_icon2);
     invert_bitmap_in_place(s_bitmap_icon3);
