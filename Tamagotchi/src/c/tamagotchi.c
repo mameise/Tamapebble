@@ -108,7 +108,7 @@ static AppTimer *screen_tick_handler;
 #define PERSIST_KEY_BG_MARKERS_COLOR  211
 #define PERSIST_KEY_BG_MARKERS_STYLE  212
 #define PERSIST_KEY_ICONS_SMALL       214
-#define PERSIST_KEY_TAMA_INVERT       215
+#define PERSIST_KEY_TAMA_PIXEL_COLOR  215
 #define PERSIST_KEY_TAMA_BG_COLOR     216
 #define PERSIST_KEY_TAMA_BG_ENABLED   217
 
@@ -224,16 +224,18 @@ static uint8_t s_bg_markers_style        = 0;     // 0=Arabic, 1=Roman, 2=Ticks
 // the user wants a tighter look.
 static bool    s_icons_small             = false;
 
-// Tama-display customization. Three toggles/colors that affect how the
-// Tama LCD area is drawn:
-//   s_tama_invert     — when true, draw Tama pixels in the BG color and the
-//                       background in pixel color (inverted look). Also
-//                       inverts menu icons via GCompOpAssignInverted.
-//   s_tama_bg_color   — the color of the rounded background behind the
-//                       Tama LCD + icons. Default white.
-//   s_tama_bg_enabled — when false, don't draw the Tama background layer
-//                       at all (so the watchface background shows through).
-static bool    s_tama_invert             = false;
+// Tama-display customization. Toggles/colors that affect how the Tama
+// LCD area is drawn:
+//   s_tama_pixel_color — color used for "on" pixels of the Tama display
+//                        and for the menu icons. Default black. Set to
+//                        white for an inverted/OLED look, or any other
+//                        color for a custom palette.
+//   s_tama_bg_color    — color of the rounded background behind the Tama
+//                        LCD + icons. Default white. Picked independently
+//                        of the pixel color.
+//   s_tama_bg_enabled  — when false, don't draw the Tama background layer
+//                        at all (so the watchface background shows through).
+static uint8_t s_tama_pixel_color_argb   = 0xC0;  // default black (opaque)
 static uint8_t s_tama_bg_color_argb      = 0xFF;  // default white
 static bool    s_tama_bg_enabled         = true;
 static bool s_sound_enabled     = false;  // OFF by default — opt-in feature
@@ -899,10 +901,10 @@ static void hands_update_proc(Layer *layer, GContext *ctx)
 static void screen_update_proc(Layer *layer, GContext *ctx) { 
   set_activity(ACT_DRAW_SCREEN_PROC);
 
-  // Pixel color: black by default, white when inverted. The background
-  // behind the Tama (drawn by tama_bg_update_proc) is independent — the
-  // user can pick any color for it, regardless of the invert setting.
-  GColor pixel_color = s_tama_invert ? GColorWhite : GColorBlack;
+  // Pixel color is user-configurable. Default is black, but the user can
+  // pick white (for an inverted/OLED look) or any other color via the
+  // phone settings.
+  GColor pixel_color = (GColor){.argb = s_tama_pixel_color_argb};
   graphics_context_set_fill_color(ctx, pixel_color);
 
   //draw pixels
@@ -1084,18 +1086,21 @@ static void prv_inbox_received_handler(DictionaryIterator *iter, void *context) 
               (int)s_icons_small);
     }
   }
-  Tuple *tama_invert_t = dict_find(iter, MESSAGE_KEY_TamaInvert);
-  if (tama_invert_t) {
-    bool new_val = (tama_invert_t->value->int32 != 0);
-    if (new_val != s_tama_invert) {
-      // Inversion is baked into the icon bitmaps at load time (because
-      // GCompOpAssignInverted is unreliable on color Pebbles), so changing
-      // this setting needs an app restart.
-      s_tama_invert = new_val;
-      persist_write_bool(PERSIST_KEY_TAMA_INVERT, s_tama_invert);
+  Tuple *tama_pixel_t = dict_find(iter, MESSAGE_KEY_TamaPixelColor);
+  if (tama_pixel_t) {
+    uint8_t new_val = (uint8_t)tama_pixel_t->value->int32;
+    if (new_val != s_tama_pixel_color_argb) {
+      // Icon colors are baked into the bitmap palette at load time
+      // (GCompOpAssignInverted and similar tricks are unreliable on color
+      // Pebbles), so changing this setting needs an app restart for the
+      // icons to recolor. The Tama LCD pixels themselves update live.
+      s_tama_pixel_color_argb = new_val;
+      persist_write_int(PERSIST_KEY_TAMA_PIXEL_COLOR, s_tama_pixel_color_argb);
       APP_LOG(APP_LOG_LEVEL_INFO,
-              "TamaInvert changed to %d -- restart app to apply",
-              (int)s_tama_invert);
+              "TamaPixelColor changed to 0x%02x -- restart app to recolor icons",
+              (int)s_tama_pixel_color_argb);
+      // Mark the Tama LCD dirty so at least the pixels update right away.
+      if (s_screen_layer) layer_mark_dirty(s_screen_layer);
     }
   }
   Tuple *tama_bg_color_t = dict_find(iter, MESSAGE_KEY_TamaBgColor);
@@ -1121,14 +1126,14 @@ static void prv_inbox_received_handler(DictionaryIterator *iter, void *context) 
     update_clock_text();  // re-renders time + date text layers
     battery_handler(battery_state_service_peek());
     APP_LOG(APP_LOG_LEVEL_INFO,
-            "Customization updated: text=0x%02x outline=%d/0x%02x hands=0x%02x/0x%02x thick=%d bg=0x%02x markers=0x%02x style=%d tama_inv=%d tama_bg_col=0x%02x tama_bg_en=%d",
+            "Customization updated: text=0x%02x outline=%d/0x%02x hands=0x%02x/0x%02x thick=%d bg=0x%02x markers=0x%02x style=%d tama_px=0x%02x tama_bg_col=0x%02x tama_bg_en=%d",
             (int)s_text_color_argb, (int)s_text_outline_enabled,
             (int)s_text_outline_color_argb,
             (int)s_hands_color_argb, (int)s_hands_outline_color_argb,
             (int)s_hands_thickness,
             (int)s_bg_fill_color_argb, (int)s_bg_markers_color_argb,
             (int)s_bg_markers_style,
-            (int)s_tama_invert, (int)s_tama_bg_color_argb,
+            (int)s_tama_pixel_color_argb, (int)s_tama_bg_color_argb,
             (int)s_tama_bg_enabled);
   }
 
@@ -1453,36 +1458,34 @@ static void battery_handler(BatteryChargeState state)
   sync_shadow_text(s_battery_shadow, s_battery_text);
 }
 
-// Invert the visible (opaque) colors of a GBitmap so it renders as a
-// "negative" of itself, keeping transparency intact.
+// Recolor every visible (alpha > 0) pixel of a GBitmap to the given
+// target color, keeping transparency intact. Used to tint the menu
+// icons with the user-picked pixel color.
 //
 // On the Pebble compiler the icons are stored in whatever GBitmapFormat
 // is smallest for the source PNG — usually GBitmapFormat1BitPalette or
 // 2BitPalette for our black-on-transparent menu icons, and only in rare
 // cases GBitmapFormat8Bit. In palettized formats the pixel data is just
 // indices into a small palette; the actual colors live in the palette
-// itself. So inverting "the bitmap" means inverting either the palette
+// itself. So recoloring "the bitmap" means rewriting either the palette
 // (palettized formats) or the raw pixel data (8-bit).
 //
 // We previously tried GCompOpAssignInverted at draw time, but on color
 // Pebbles it inverts the alpha channel too, which makes the icons
-// disappear into the background. Doing the invert once at load time
-// here works around that.
-static void invert_bitmap_in_place(GBitmap *bmp)
+// disappear into the background. Doing this once at load time works
+// around that.
+static void recolor_bitmap_in_place(GBitmap *bmp, GColor target)
 {
 #if defined(PBL_COLOR)
   if (!bmp) return;
   GBitmapFormat fmt = gbitmap_get_format(bmp);
 
-  // Helper: invert just the visible (alpha > 0) entries of an argb8 byte.
-  // GColor argb8 layout: AARRGGBB (2 bits each).
-  #define INVERT_ARGB8(argb) do {                                         \
+  // Helper: rewrite an argb8 byte to the target color, keeping its
+  // existing alpha. GColor argb8 layout: AARRGGBB (2 bits each).
+  #define RECOLOR_ARGB8(argb) do {                                        \
     uint8_t _a = ((argb) >> 6) & 0x3;                                     \
     if (_a > 0) {                                                         \
-      uint8_t _r = ((argb) >> 4) & 0x3;                                   \
-      uint8_t _g = ((argb) >> 2) & 0x3;                                   \
-      uint8_t _b = (argb) & 0x3;                                          \
-      (argb) = (_a << 6) | ((3 - _r) << 4) | ((3 - _g) << 2) | (3 - _b);  \
+      (argb) = (_a << 6) | (target.argb & 0x3F);                          \
     }                                                                     \
   } while (0)
 
@@ -1490,40 +1493,37 @@ static void invert_bitmap_in_place(GBitmap *bmp)
     case GBitmapFormat1BitPalette:
     case GBitmapFormat2BitPalette:
     case GBitmapFormat4BitPalette: {
-      // Palettized: invert each color in the palette. Palette size is
-      // 2^(bits-per-pixel) entries, each one byte of argb8.
+      // Palettized: rewrite each opaque color in the palette.
       GColor *palette = gbitmap_get_palette(bmp);
       if (!palette) return;
       int n_entries = (fmt == GBitmapFormat1BitPalette) ? 2 :
                       (fmt == GBitmapFormat2BitPalette) ? 4 : 16;
       for (int i = 0; i < n_entries; i++) {
-        INVERT_ARGB8(palette[i].argb);
+        RECOLOR_ARGB8(palette[i].argb);
       }
       break;
     }
     case GBitmapFormat8Bit:
     case GBitmapFormat8BitCircular: {
-      // 8-bit ARGB: invert every visible pixel directly.
+      // 8-bit ARGB: rewrite every visible pixel directly.
       GRect bounds = gbitmap_get_bounds(bmp);
       uint8_t *data = gbitmap_get_data(bmp);
       uint16_t stride = gbitmap_get_bytes_per_row(bmp);
       for (int16_t y = 0; y < bounds.size.h; y++) {
         uint8_t *row = data + (y * stride);
         for (int16_t x = 0; x < bounds.size.w; x++) {
-          INVERT_ARGB8(row[x]);
+          RECOLOR_ARGB8(row[x]);
         }
       }
       break;
     }
     default:
-      // 1-bit (non-palettized) is just bits; not used for our color icons.
-      // Skip silently rather than risk corrupting unrelated bitmap formats.
       APP_LOG(APP_LOG_LEVEL_WARNING,
-              "invert_bitmap_in_place: unhandled format %d", (int)fmt);
+              "recolor_bitmap_in_place: unhandled format %d", (int)fmt);
       break;
   }
 
-  #undef INVERT_ARGB8
+  #undef RECOLOR_ARGB8
 #endif
 }
 
@@ -1615,25 +1615,26 @@ static void main_window_load(Window *window) {
   s_bitmap_icon8 = gbitmap_create_with_resource(RESOURCE_ID_ICON8);
 #endif
 
-  // If invert mode is enabled, flip the pixel colors of every icon bitmap.
-  // This is more reliable than using GCompOpAssignInverted at draw time,
-  // which on color Pebbles incorrectly inverts the alpha channel and makes
-  // the icons unreadable.
-  if (s_tama_invert) {
-    // Log the actual format so we know which code path we exercise.
-    APP_LOG(APP_LOG_LEVEL_INFO,
-            "Icon bitmap format: %d (1=1Bit, 2=8Bit, 3=1BitPalette, "
-            "4=2BitPalette, 5=4BitPalette)",
-            (int)gbitmap_get_format(s_bitmap_icon1));
-    invert_bitmap_in_place(s_bitmap_icon1);
-    invert_bitmap_in_place(s_bitmap_icon2);
-    invert_bitmap_in_place(s_bitmap_icon3);
-    invert_bitmap_in_place(s_bitmap_icon4);
-    invert_bitmap_in_place(s_bitmap_icon5);
-    invert_bitmap_in_place(s_bitmap_icon6);
-    invert_bitmap_in_place(s_bitmap_icon7);
-    invert_bitmap_in_place(s_bitmap_icon8);
-  }
+  // Recolor the icon bitmaps to match the user-picked Tama pixel color.
+  // Default is black, so usually this is a no-op — we always run it
+  // anyway so any non-default color (white, blue, green, ...) gets
+  // applied. Doing the recolor at load time rather than at draw time
+  // works around a Pebble quirk where GCompOpAssignInverted incorrectly
+  // affects the alpha channel of palettized color bitmaps.
+  GColor pixel_color = (GColor){.argb = s_tama_pixel_color_argb};
+  APP_LOG(APP_LOG_LEVEL_INFO,
+          "Icon bitmap format: %d (1=1Bit, 2=8Bit, 3=1BitPalette, "
+          "4=2BitPalette, 5=4BitPalette) -- recoloring to 0x%02x",
+          (int)gbitmap_get_format(s_bitmap_icon1),
+          (int)s_tama_pixel_color_argb);
+  recolor_bitmap_in_place(s_bitmap_icon1, pixel_color);
+  recolor_bitmap_in_place(s_bitmap_icon2, pixel_color);
+  recolor_bitmap_in_place(s_bitmap_icon3, pixel_color);
+  recolor_bitmap_in_place(s_bitmap_icon4, pixel_color);
+  recolor_bitmap_in_place(s_bitmap_icon5, pixel_color);
+  recolor_bitmap_in_place(s_bitmap_icon6, pixel_color);
+  recolor_bitmap_in_place(s_bitmap_icon7, pixel_color);
+  recolor_bitmap_in_place(s_bitmap_icon8, pixel_color);
 
   // Create icons layer
 #if defined(PBL_PLATFORM_CHALK)
@@ -2213,8 +2214,8 @@ static void loadSettingsFromPersist(void)
   if (persist_exists(PERSIST_KEY_ICONS_SMALL)) {
     s_icons_small = persist_read_bool(PERSIST_KEY_ICONS_SMALL);
   }
-  if (persist_exists(PERSIST_KEY_TAMA_INVERT)) {
-    s_tama_invert = persist_read_bool(PERSIST_KEY_TAMA_INVERT);
+  if (persist_exists(PERSIST_KEY_TAMA_PIXEL_COLOR)) {
+    s_tama_pixel_color_argb = (uint8_t)persist_read_int(PERSIST_KEY_TAMA_PIXEL_COLOR);
   }
   if (persist_exists(PERSIST_KEY_TAMA_BG_COLOR)) {
     s_tama_bg_color_argb = (uint8_t)persist_read_int(PERSIST_KEY_TAMA_BG_COLOR);
