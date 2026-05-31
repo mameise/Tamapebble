@@ -1480,26 +1480,26 @@ static void recolor_bitmap_in_place(GBitmap *bmp, GColor target)
   if (!bmp) return;
   GBitmapFormat fmt = gbitmap_get_format(bmp);
 
-  // Helper: rewrite an argb8 byte to the target color, keeping its
-  // existing alpha. GColor argb8 layout: AARRGGBB (2 bits each).
-  #define RECOLOR_ARGB8(argb) do {                                        \
-    uint8_t _a = ((argb) >> 6) & 0x3;                                     \
-    if (_a > 0) {                                                         \
-      (argb) = (_a << 6) | (target.argb & 0x3F);                          \
-    }                                                                     \
-  } while (0)
+  // The RGB bits of the target color, ready to OR with a preserved
+  // 2-bit alpha. argb8 layout is AARRGGBB.
+  uint8_t target_rgb = target.argb & 0x3F;
 
   switch (fmt) {
     case GBitmapFormat1BitPalette:
     case GBitmapFormat2BitPalette:
     case GBitmapFormat4BitPalette: {
-      // Palettized: rewrite each opaque color in the palette.
+      // Palettized: rewrite each opaque palette entry to the target color,
+      // keeping its existing alpha so anti-aliased entries still blend
+      // smoothly into the background.
       GColor *palette = gbitmap_get_palette(bmp);
       if (!palette) return;
       int n_entries = (fmt == GBitmapFormat1BitPalette) ? 2 :
                       (fmt == GBitmapFormat2BitPalette) ? 4 : 16;
       for (int i = 0; i < n_entries; i++) {
-        RECOLOR_ARGB8(palette[i].argb);
+        uint8_t a = (palette[i].argb >> 6) & 0x3;
+        if (a > 0) {
+          palette[i].argb = (a << 6) | target_rgb;
+        }
       }
       break;
     }
@@ -1512,7 +1512,10 @@ static void recolor_bitmap_in_place(GBitmap *bmp, GColor target)
       for (int16_t y = 0; y < bounds.size.h; y++) {
         uint8_t *row = data + (y * stride);
         for (int16_t x = 0; x < bounds.size.w; x++) {
-          RECOLOR_ARGB8(row[x]);
+          uint8_t a = (row[x] >> 6) & 0x3;
+          if (a > 0) {
+            row[x] = (a << 6) | target_rgb;
+          }
         }
       }
       break;
@@ -1522,8 +1525,9 @@ static void recolor_bitmap_in_place(GBitmap *bmp, GColor target)
               "recolor_bitmap_in_place: unhandled format %d", (int)fmt);
       break;
   }
-
-  #undef RECOLOR_ARGB8
+#else
+  (void)bmp;
+  (void)target;
 #endif
 }
 
