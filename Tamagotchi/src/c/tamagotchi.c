@@ -108,6 +108,9 @@ static AppTimer *screen_tick_handler;
 #define PERSIST_KEY_BG_MARKERS_COLOR  211
 #define PERSIST_KEY_BG_MARKERS_STYLE  212
 #define PERSIST_KEY_ICONS_SMALL       214
+#define PERSIST_KEY_TAMA_INVERT       215
+#define PERSIST_KEY_TAMA_BG_COLOR     216
+#define PERSIST_KEY_TAMA_BG_ENABLED   217
 
 // Crash / lifecycle diagnostics keys
 #define PERSIST_KEY_LAST_LAUNCH_TS    300  // time_t of last init()
@@ -220,6 +223,19 @@ static uint8_t s_bg_markers_style        = 0;     // 0=Arabic, 1=Roman, 2=Ticks
 // Picking compact frees up vertical space around the Tama LCD, useful if
 // the user wants a tighter look.
 static bool    s_icons_small             = false;
+
+// Tama-display customization. Three toggles/colors that affect how the
+// Tama LCD area is drawn:
+//   s_tama_invert     — when true, draw Tama pixels in the BG color and the
+//                       background in pixel color (inverted look). Also
+//                       inverts menu icons via GCompOpAssignInverted.
+//   s_tama_bg_color   — the color of the rounded background behind the
+//                       Tama LCD + icons. Default white.
+//   s_tama_bg_enabled — when false, don't draw the Tama background layer
+//                       at all (so the watchface background shows through).
+static bool    s_tama_invert             = false;
+static uint8_t s_tama_bg_color_argb      = 0xFF;  // default white
+static bool    s_tama_bg_enabled         = true;
 static bool s_sound_enabled     = false;  // OFF by default — opt-in feature
 static uint8_t s_sound_volume   = 60;
 
@@ -548,8 +564,11 @@ static void icons_update_proc(Layer *layer, GContext *ctx) {
   // Set the draw color
   graphics_context_set_fill_color(ctx, GColorBlack);
 
-  // Set the compositing mode (GCompOpSet is required for transparency)
-  graphics_context_set_compositing_mode(ctx, GCompOpSet);
+  // Set the compositing mode. GCompOpSet preserves icon transparency
+  // normally. GCompOpAssignInverted flips black<->white in the bitmap,
+  // giving us inverted icons that match the inverted Tama LCD.
+  graphics_context_set_compositing_mode(
+    ctx, s_tama_invert ? GCompOpAssignInverted : GCompOpSet);
 
   if(s_selectedIcon >= 0)
   {
@@ -691,7 +710,14 @@ static void tama_bg_update_proc(Layer *layer, GContext *ctx)
 
   GRect rect = GRect(left, top, right - left, bottom - top);
 
-  graphics_context_set_fill_color(ctx, GColorWhite);
+  // Respect the user setting: skip drawing entirely when disabled.
+  // The user's chosen BG color is always used here, independently of the
+  // invert setting — invert only flips the Tama pixels + icons, not the
+  // background.
+  if (!s_tama_bg_enabled) return;
+
+  GColor fill = (GColor){.argb = s_tama_bg_color_argb};
+  graphics_context_set_fill_color(ctx, fill);
   graphics_fill_rect(ctx, rect, 6, GCornersAll);
 #endif
 }
@@ -872,8 +898,12 @@ static void hands_update_proc(Layer *layer, GContext *ctx)
 // Handles drawing screen layer
 static void screen_update_proc(Layer *layer, GContext *ctx) { 
   set_activity(ACT_DRAW_SCREEN_PROC);
-  // draw new screen
-  graphics_context_set_fill_color(ctx, GColorBlack);
+
+  // Pixel color: black by default, white when inverted. The background
+  // behind the Tama (drawn by tama_bg_update_proc) is independent — the
+  // user can pick any color for it, regardless of the invert setting.
+  GColor pixel_color = s_tama_invert ? GColorWhite : GColorBlack;
+  graphics_context_set_fill_color(ctx, pixel_color);
 
   //draw pixels
   for (size_t h = 0; h < LCD_HEIGHT; h++)
@@ -1054,21 +1084,44 @@ static void prv_inbox_received_handler(DictionaryIterator *iter, void *context) 
               (int)s_icons_small);
     }
   }
+  Tuple *tama_invert_t = dict_find(iter, MESSAGE_KEY_TamaInvert);
+  if (tama_invert_t) {
+    s_tama_invert = (tama_invert_t->value->int32 != 0);
+    persist_write_bool(PERSIST_KEY_TAMA_INVERT, s_tama_invert);
+    customization_changed = true;
+  }
+  Tuple *tama_bg_color_t = dict_find(iter, MESSAGE_KEY_TamaBgColor);
+  if (tama_bg_color_t) {
+    s_tama_bg_color_argb = (uint8_t)tama_bg_color_t->value->int32;
+    persist_write_int(PERSIST_KEY_TAMA_BG_COLOR, s_tama_bg_color_argb);
+    customization_changed = true;
+  }
+  Tuple *tama_bg_enabled_t = dict_find(iter, MESSAGE_KEY_TamaBgEnabled);
+  if (tama_bg_enabled_t) {
+    s_tama_bg_enabled = (tama_bg_enabled_t->value->int32 != 0);
+    persist_write_bool(PERSIST_KEY_TAMA_BG_ENABLED, s_tama_bg_enabled);
+    customization_changed = true;
+  }
 
   if (customization_changed) {
     // Re-render everything that uses these colors
     if (s_hands_layer) layer_mark_dirty(s_hands_layer);
     if (s_bg_custom_layer) layer_mark_dirty(s_bg_custom_layer);
+    if (s_tama_bg_layer) layer_mark_dirty(s_tama_bg_layer);
+    if (s_icons_layer) layer_mark_dirty(s_icons_layer);
+    if (s_screen_layer) layer_mark_dirty(s_screen_layer);
     update_clock_text();  // re-renders time + date text layers
     battery_handler(battery_state_service_peek());
     APP_LOG(APP_LOG_LEVEL_INFO,
-            "Customization updated: text=0x%02x outline=%d/0x%02x hands=0x%02x/0x%02x thick=%d bg=0x%02x markers=0x%02x style=%d",
+            "Customization updated: text=0x%02x outline=%d/0x%02x hands=0x%02x/0x%02x thick=%d bg=0x%02x markers=0x%02x style=%d tama_inv=%d tama_bg_col=0x%02x tama_bg_en=%d",
             (int)s_text_color_argb, (int)s_text_outline_enabled,
             (int)s_text_outline_color_argb,
             (int)s_hands_color_argb, (int)s_hands_outline_color_argb,
             (int)s_hands_thickness,
             (int)s_bg_fill_color_argb, (int)s_bg_markers_color_argb,
-            (int)s_bg_markers_style);
+            (int)s_bg_markers_style,
+            (int)s_tama_invert, (int)s_tama_bg_color_argb,
+            (int)s_tama_bg_enabled);
   }
 
   // handle incoming rom
@@ -2057,6 +2110,15 @@ static void loadSettingsFromPersist(void)
   }
   if (persist_exists(PERSIST_KEY_ICONS_SMALL)) {
     s_icons_small = persist_read_bool(PERSIST_KEY_ICONS_SMALL);
+  }
+  if (persist_exists(PERSIST_KEY_TAMA_INVERT)) {
+    s_tama_invert = persist_read_bool(PERSIST_KEY_TAMA_INVERT);
+  }
+  if (persist_exists(PERSIST_KEY_TAMA_BG_COLOR)) {
+    s_tama_bg_color_argb = (uint8_t)persist_read_int(PERSIST_KEY_TAMA_BG_COLOR);
+  }
+  if (persist_exists(PERSIST_KEY_TAMA_BG_ENABLED)) {
+    s_tama_bg_enabled = persist_read_bool(PERSIST_KEY_TAMA_BG_ENABLED);
   }
 
   APP_LOG(APP_LOG_LEVEL_INFO,
