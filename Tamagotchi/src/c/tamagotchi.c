@@ -564,11 +564,11 @@ static void icons_update_proc(Layer *layer, GContext *ctx) {
   // Set the draw color
   graphics_context_set_fill_color(ctx, GColorBlack);
 
-  // Set the compositing mode. GCompOpSet preserves icon transparency
-  // normally. GCompOpAssignInverted flips black<->white in the bitmap,
-  // giving us inverted icons that match the inverted Tama LCD.
-  graphics_context_set_compositing_mode(
-    ctx, s_tama_invert ? GCompOpAssignInverted : GCompOpSet);
+  // GCompOpSet preserves icon transparency. Inversion (if enabled) is
+  // handled at bitmap-load time via invert_bitmap_in_place(), not here —
+  // GCompOpAssignInverted doesn't behave correctly on color Pebbles
+  // because it also inverts the alpha channel.
+  graphics_context_set_compositing_mode(ctx, GCompOpSet);
 
   if(s_selectedIcon >= 0)
   {
@@ -1086,9 +1086,17 @@ static void prv_inbox_received_handler(DictionaryIterator *iter, void *context) 
   }
   Tuple *tama_invert_t = dict_find(iter, MESSAGE_KEY_TamaInvert);
   if (tama_invert_t) {
-    s_tama_invert = (tama_invert_t->value->int32 != 0);
-    persist_write_bool(PERSIST_KEY_TAMA_INVERT, s_tama_invert);
-    customization_changed = true;
+    bool new_val = (tama_invert_t->value->int32 != 0);
+    if (new_val != s_tama_invert) {
+      // Inversion is baked into the icon bitmaps at load time (because
+      // GCompOpAssignInverted is unreliable on color Pebbles), so changing
+      // this setting needs an app restart.
+      s_tama_invert = new_val;
+      persist_write_bool(PERSIST_KEY_TAMA_INVERT, s_tama_invert);
+      APP_LOG(APP_LOG_LEVEL_INFO,
+              "TamaInvert changed to %d -- restart app to apply",
+              (int)s_tama_invert);
+    }
   }
   Tuple *tama_bg_color_t = dict_find(iter, MESSAGE_KEY_TamaBgColor);
   if (tama_bg_color_t) {
@@ -1445,6 +1453,47 @@ static void battery_handler(BatteryChargeState state)
   sync_shadow_text(s_battery_shadow, s_battery_text);
 }
 
+// Pixel-by-pixel invert of a GBitmap, for icons in inverted-Tama mode.
+// Pebble's GCompOpAssignInverted doesn't work right for palettized
+// bitmaps with alpha — it inverts the alpha channel too, leaving the
+// icon as a solid block instead of just flipping black<->white. We
+// handle this manually: walk every pixel, and if it's opaque, swap
+// black<->white while keeping the alpha. Transparent pixels are left
+// alone. Works for both 1-bit and 8-bit Pebble bitmap formats.
+static void invert_bitmap_in_place(GBitmap *bmp)
+{
+#if defined(PBL_COLOR)
+  if (!bmp) return;
+  GRect bounds = gbitmap_get_bounds(bmp);
+  GBitmapFormat fmt = gbitmap_get_format(bmp);
+  if (fmt != GBitmapFormat8Bit && fmt != GBitmapFormat8BitCircular) {
+    // Other formats (1-bit etc.) handled differently — for our PNG-derived
+    // icons on Emery this branch shouldn't run. Skip safely.
+    return;
+  }
+  uint8_t *data = gbitmap_get_data(bmp);
+  uint16_t stride = gbitmap_get_bytes_per_row(bmp);
+  for (int16_t y = 0; y < bounds.size.h; y++) {
+    uint8_t *row = data + (y * stride);
+    for (int16_t x = 0; x < bounds.size.w; x++) {
+      uint8_t argb = row[x];
+      uint8_t a = (argb >> 6) & 0x3;
+      // Only invert visible (opaque or partially opaque) pixels.
+      // Pixel format: AARRGGBB (2 bits each).
+      if (a > 0) {
+        uint8_t r = (argb >> 4) & 0x3;
+        uint8_t g = (argb >> 2) & 0x3;
+        uint8_t b = argb & 0x3;
+        r = 3 - r;
+        g = 3 - g;
+        b = 3 - b;
+        row[x] = (a << 6) | (r << 4) | (g << 2) | b;
+      }
+    }
+  }
+#endif
+}
+
 static void main_window_load(Window *window) {
   // Get information about the Window
   Layer *window_layer = window_get_root_layer(window);
@@ -1532,6 +1581,21 @@ static void main_window_load(Window *window) {
   s_bitmap_icon7 = gbitmap_create_with_resource(RESOURCE_ID_ICON7);
   s_bitmap_icon8 = gbitmap_create_with_resource(RESOURCE_ID_ICON8);
 #endif
+
+  // If invert mode is enabled, flip the pixel colors of every icon bitmap.
+  // This is more reliable than using GCompOpAssignInverted at draw time,
+  // which on color Pebbles incorrectly inverts the alpha channel and makes
+  // the icons unreadable.
+  if (s_tama_invert) {
+    invert_bitmap_in_place(s_bitmap_icon1);
+    invert_bitmap_in_place(s_bitmap_icon2);
+    invert_bitmap_in_place(s_bitmap_icon3);
+    invert_bitmap_in_place(s_bitmap_icon4);
+    invert_bitmap_in_place(s_bitmap_icon5);
+    invert_bitmap_in_place(s_bitmap_icon6);
+    invert_bitmap_in_place(s_bitmap_icon7);
+    invert_bitmap_in_place(s_bitmap_icon8);
+  }
 
   // Create icons layer
 #if defined(PBL_PLATFORM_CHALK)
