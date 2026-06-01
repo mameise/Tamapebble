@@ -1,12 +1,11 @@
 #define bitRead(value, bit) (((value) >> (bit)) & 0x01)
-#define FPS 20
+#define FPS 30
 #define FPS_DELAY 1000/FPS //ms
 #define STEP_DELAY 1 //ms
-// Moderate reduction from Stefan's 600. CPU load itself isn't the main
-// crash cause (crashes happen even with very low load) — the issue is
-// CPU activity colliding with the backlight ramp-up on Pebble Time 2.
-// That's handled separately via the tap-aware throttling in milli_tick.
-#define STEPS_PER_DELAY 400
+// STEPS_PER_DELAY was previously fixed (600 by default, 400 during
+// crash debugging). It's now adaptive — the milli_tick loop runs
+// tamalib_step() until tamalib's hal_sleep_until signals "caught up".
+// See s_tamalib_is_late below.
 
 #define VRAM_SIZE (64 + 13)
 #define BYTES_PER_LINE 32
@@ -84,6 +83,14 @@ static bool s_hasReceivedRom = false;
 static bool s_hasReceivedSaveFile = false;
 static bool s_loadedFromPersist = false;  // true if we already loaded state from local watch storage
 static bool s_clearTextLayerOnScreenRefresh = false;
+// Set true at the start of each milli_tick; cleared inside hal_sleep_until
+// when tamalib indicates it's caught up to real time. We then exit the
+// emulator step loop. This adaptive approach replaces the old fixed
+// STEPS_PER_DELAY = 600 (or 400) constant — it runs exactly as many
+// steps as tamalib needs to stay in sync, no more, no less. Originally
+// from Stefan Bauwens' dev branch (commit be406f9, "Improve the way we
+// loop"). Reduces clock drift and avoids busy-waiting CPU cycles.
+static bool s_tamalib_is_late = false;
 static flat_state_t stateToLoad = {0};
 
 //ticks
@@ -303,9 +310,16 @@ static timestamp_t hal_get_timestamp(void)
   return (int)seconds * 1000000 + (int)milliseconds * 1000; 
 }
 
-static void hal_sleep_until(timestamp_t ts) //this makes the time be accurate
+static void hal_sleep_until(timestamp_t ts)
 {
-  while((int) (ts - hal_get_timestamp()) > 0);
+  // Adaptive timing (Stefan Bauwens, dev branch commit be406f9). tamalib
+  // calls hal_sleep_until when it wants to wait for real-time to catch up
+  // with the emulated clock. Instead of busy-waiting here, we simply note
+  // that tamalib is no longer "late" — the milli_tick loop will then stop
+  // stepping until the next 1ms AppTimer fires.
+  if ((int)(ts - hal_get_timestamp()) > 0) {
+    s_tamalib_is_late = false;
+  }
 }
 
 static void hal_update_screen(void) //since we're not using tamalib_mainloop we must call this ourselves
@@ -483,10 +497,14 @@ static void milli_tick() //runs once every ms.
   if (s_hasReceivedRom && s_hasReceivedSaveFile)
   {
     set_activity(ACT_TAMALIB_STEP);
-    for (size_t i = 0; i < STEPS_PER_DELAY; i++)
-    {
-        tamalib_step();
-    } 
+    // Adaptive step loop (Stefan, dev branch). Step until tamalib clears
+    // the "late" flag in hal_sleep_until, i.e. until the emulator has
+    // caught up to real time. Replaces a fixed STEPS_PER_DELAY constant
+    // that was either drifting (too few) or wasting CPU (too many).
+    s_tamalib_is_late = true;
+    while (s_tamalib_is_late) {
+      tamalib_step();
+    }
   } 
   milli_tick_handler = app_timer_register(STEP_DELAY, milli_tick, NULL); // calls itself in 1ms
 }
