@@ -62,7 +62,8 @@
             "IconsSmall",
             "TamaPixelColor",
             "TamaBgColor",
-            "TamaBgEnabled"
+            "TamaBgEnabled",
+            "DateFormat"
         ],
         "projectType": "native",
         "resources": {
