@@ -377,6 +377,9 @@ Pebble.addEventListener('webviewclosed',
         if (messageKeys.TamaBgEnabled in dict) {
             settingsMsg['TamaBgEnabled'] = dict[messageKeys.TamaBgEnabled] ? 1 : 0;
         }
+        if (messageKeys.DateFormat in dict) {
+            settingsMsg['DateFormat'] = parseInt(dict[messageKeys.DateFormat], 10);
+        }
 
         if (Object.keys(settingsMsg).length > 0) {
             console.log("Forwarding settings to watch: " + JSON.stringify(settingsMsg));

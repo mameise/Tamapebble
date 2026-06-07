@@ -203,6 +203,18 @@ module.exports = [
         "description": "Color for the Tama LCD pixels and the menu icons. Default black. Pick white for an inverted/OLED look, or any other color for a custom palette. Changing this needs an app restart to recolor the icons.",
         "defaultValue": "0x000000",
         "sunlight": false
+      },
+      {
+        "type": "select",
+        "messageKey": "DateFormat",
+        "label": "Date format",
+        "description": "Format for the date display next to the battery. The time format (12h or 24h) follows your watch's own Time settings.",
+        "defaultValue": "0",
+        "options": [
+          { "label": "European (Mo 21.05)", "value": "0" },
+          { "label": "American (Mon 5/21)", "value": "1" },
+          { "label": "ISO-style (Mo 05-21)", "value": "2" }
+        ]
       }
     ]
   },
