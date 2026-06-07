@@ -118,6 +118,7 @@ static AppTimer *screen_tick_handler;
 #define PERSIST_KEY_TAMA_PIXEL_COLOR  215
 #define PERSIST_KEY_TAMA_BG_COLOR     216
 #define PERSIST_KEY_TAMA_BG_ENABLED   217
+#define PERSIST_KEY_DATE_FORMAT       218
 
 // Crash / lifecycle diagnostics keys
 #define PERSIST_KEY_LAST_LAUNCH_TS    300  // time_t of last init()
@@ -230,6 +231,13 @@ static uint8_t s_bg_markers_style        = 0;     // 0=Arabic, 1=Roman, 2=Ticks
 // Picking compact frees up vertical space around the Tama LCD, useful if
 // the user wants a tighter look.
 static bool    s_icons_small             = false;
+
+// Date format. Time format follows the watch's own 12h/24h system setting
+// via clock_is_24h_style(), so users don't need to configure that twice.
+//   0 = European: "Mo 21.05" (day.month)
+//   1 = American: "Mon 5/21" (month/day)
+//   2 = ISO:      "Mo 05-21" (month-day, zero-padded)
+static uint8_t s_date_format             = 0;
 
 // Tama-display customization. Toggles/colors that affect how the Tama
 // LCD area is drawn:
@@ -1133,6 +1141,14 @@ static void prv_inbox_received_handler(DictionaryIterator *iter, void *context) 
     persist_write_bool(PERSIST_KEY_TAMA_BG_ENABLED, s_tama_bg_enabled);
     customization_changed = true;
   }
+  Tuple *date_format_t = dict_find(iter, MESSAGE_KEY_DateFormat);
+  if (date_format_t) {
+    int v = date_format_t->value->int32;
+    if (v < 0) v = 0; else if (v > 2) v = 2;
+    s_date_format = (uint8_t)v;
+    persist_write_int(PERSIST_KEY_DATE_FORMAT, v);
+    customization_changed = true;
+  }
 
   if (customization_changed) {
     // Re-render everything that uses these colors
@@ -1402,13 +1418,29 @@ static void update_clock_text(void)
   struct tm *t = localtime(&now);
   if (!t) return;
 
-  // Time: HH:MM (24h)
-  strftime(s_time_text, sizeof(s_time_text), "%H:%M", t);
+  // Time: follow the watch's system-wide 12h/24h setting. clock_is_24h_style()
+  // returns the user's preference from the watch's own Settings → Time menu,
+  // so we don't need a separate setting in the phone-side config.
+  if (clock_is_24h_style()) {
+    strftime(s_time_text, sizeof(s_time_text), "%H:%M", t);
+  } else {
+    // %I gives the 12h hour (01-12), no AM/PM suffix to keep the string
+    // short enough to fit the digital-time text layer. The watch face
+    // also shows analog hands, so AM/PM is rarely ambiguous in context.
+    strftime(s_time_text, sizeof(s_time_text), "%I:%M", t);
+  }
   text_layer_set_text(s_time_layer, s_time_text);
   sync_shadow_text(s_time_shadow, s_time_text);
 
-  // Date: e.g. "Mo 21.05"
-  strftime(s_date_text, sizeof(s_date_text), "%a %d.%m", t);
+  // Date: user-configurable format. %a is locale-aware (e.g. "Mo" / "Mon").
+  const char *date_fmt;
+  switch (s_date_format) {
+    case 1:  date_fmt = "%a %-m/%-d"; break;  // American: Mon 5/21
+    case 2:  date_fmt = "%a %m-%d";   break;  // ISO-ish:  Mo 05-21
+    case 0:
+    default: date_fmt = "%a %d.%m";   break;  // European: Mo 21.05
+  }
+  strftime(s_date_text, sizeof(s_date_text), date_fmt, t);
   text_layer_set_text(s_date_layer, s_date_text);
   sync_shadow_text(s_date_shadow, s_date_text);
 
@@ -2244,6 +2276,10 @@ static void loadSettingsFromPersist(void)
   }
   if (persist_exists(PERSIST_KEY_TAMA_BG_ENABLED)) {
     s_tama_bg_enabled = persist_read_bool(PERSIST_KEY_TAMA_BG_ENABLED);
+  }
+  if (persist_exists(PERSIST_KEY_DATE_FORMAT)) {
+    int v = persist_read_int(PERSIST_KEY_DATE_FORMAT);
+    if (v >= 0 && v <= 2) s_date_format = (uint8_t)v;
   }
 
   APP_LOG(APP_LOG_LEVEL_INFO,
